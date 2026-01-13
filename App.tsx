@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { AppScreen } from './types';
 import { Layout } from './components/layout/Layout';
 import { MainMenu } from './components/screens/MainMenu';
@@ -23,15 +23,17 @@ function App() {
     setCurrentScreen(screen);
   };
 
-  const handleEnterGame = (roomId: string) => {
+  // Memoize to prevent GameScreen useEffect from re-triggering on every render
+  const handleEnterGame = useCallback((roomId: string) => {
       setCurrentRoomId(roomId);
       navigateTo(AppScreen.GAME);
-  };
+  }, []);
 
-  const handleQuitGame = () => {
+  // Memoize to prevent GameScreen useEffect from re-triggering on every render
+  const handleQuitGame = useCallback(() => {
       setCurrentRoomId(null);
       navigateTo(AppScreen.MAIN_MENU);
-  };
+  }, []);
 
   const renderScreen = () => {
     switch (currentScreen) {

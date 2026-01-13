@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { LogOut, MoreHorizontal, Wallet, Dice5, Plane, ChevronDown, Building2, Coins, Crown, Zap, Users, Play } from 'lucide-react';
+import { LogOut, MoreHorizontal, Wallet, Dice5, Plane, ChevronDown, Building2, Coins, Crown, Zap, Users, Play, AlertTriangle } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { GameEventModal, ModalType } from '../game/GameEventModal';
 import { BOARD_DATA } from '../../data/boardData';
 import { BoardCell, BuildingState, LandOwnership, Player, GameRoom } from '../../types';
 import { GameService } from '../../services/gameService';
 import { auth } from '../../firebaseConfig';
+import { playSound } from '../../utils/sound';
 
 interface GameScreenProps {
   onQuit: () => void;
@@ -41,10 +42,12 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
     isOpen: boolean;
     type: ModalType;
     cellData: BoardCell | null;
+    tollAmount?: number;
   }>({
     isOpen: false,
     type: 'INFO',
     cellData: null,
+    tollAmount: 0
   });
 
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -53,10 +56,17 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
   useEffect(() => {
       if (!roomId) return;
       const unsubscribe = GameService.subscribeToRoom(roomId, (data) => {
-          setRoomData(data);
+          if (data) {
+              setRoomData(data);
+          } else {
+              // Room Deleted (Host Left)
+              playSound('ERROR');
+              alert("호스트가 방을 나갔거나 게임이 종료되었습니다.");
+              onQuit();
+          }
       });
       return () => unsubscribe();
-  }, [roomId]);
+  }, [roomId, onQuit]);
 
   // 2. Handle Position Animation
   // When roomData updates, if my position changed, animate to it.
@@ -67,19 +77,20 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
       // If visual is different from real, animate
       if (myRealPosition !== visualPosition && !isAnimating) {
           animateMovement(visualPosition, myRealPosition);
-      } else if (!isAnimating && myRealPosition === visualPosition && roomData.players[currentUser.uid]?.isTurn) {
-         // If we are at the target position, and it's our turn, but we haven't acted yet?
-         // Actually, arrival handling happens after animation.
       }
-  }, [roomData, currentUser]); // Removing visualPosition to prevent loop, handled in animateMovement
+  }, [roomData, currentUser]); 
 
   const animateMovement = async (start: number, end: number) => {
       setIsAnimating(true);
+      playSound('DICE_ROLL');
+      await new Promise(resolve => setTimeout(resolve, 500)); // Dice roll sound delay
+
       let current = start;
       const totalSteps = (end - start + 40) % 40;
       
       // Simple step-by-step animation
       for (let i = 0; i < totalSteps; i++) {
+          playSound('MOVE');
           await new Promise(resolve => setTimeout(resolve, 150));
           current = (current + 1) % 40;
           setVisualPosition(current);
@@ -89,6 +100,7 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
       setIsAnimating(false);
       
       // Trigger Arrival Logic only if it's MY turn (or I just moved)
+      // Double check if I am the current turn player to avoid trigger for others
       if (roomData?.players[currentUser!.uid].isTurn) {
           handleArrival(current);
       }
@@ -118,7 +130,27 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
   const totalAssets = (myPlayer?.balance || 0) + realEstateValue;
   
   const handleStartGame = async () => {
-     if (roomId) await GameService.startGame(roomId);
+     if (roomId) {
+         try {
+             playSound('CLICK');
+             await GameService.startGame(roomId);
+         } catch (e: any) {
+             playSound('ERROR');
+             alert(e.message);
+         }
+     }
+  };
+
+  const handleLeaveGame = async () => {
+      if (!roomId || !currentUser) return;
+      if (window.confirm(myPlayer?.isHost ? "호스트가 나가면 방이 사라집니다. 정말 나가시겠습니까?" : "정말 나가시겠습니까?")) {
+          try {
+              await GameService.leaveRoom(roomId, currentUser.uid);
+              onQuit();
+          } catch (e) {
+              console.error(e);
+          }
+      }
   };
 
   const handleRollDice = async () => {
@@ -135,7 +167,7 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
   const handleArrival = (pos: number) => {
     const cell = BOARD_DATA.find(c => c.id === pos);
     if (!cell) {
-        handleEndTurn(); // Should not happen
+        handleEndTurn(); 
         return;
     }
 
@@ -148,8 +180,18 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
             setModalState({ isOpen: true, type: 'BUY_LAND', cellData: { ...cell, owner: currentUser?.uid } });
          } else {
             // Enemy Land -> Pay Toll
-            // TODO: Implement Pay Toll Modal in next phase. For now, just Show Info and End Turn.
-            setModalState({ isOpen: true, type: 'INFO', cellData: cell });
+            const toll = ownership.currentToll || 0;
+            if (toll > 0) {
+               setModalState({ 
+                   isOpen: true, 
+                   type: 'PAY_TOLL', 
+                   cellData: { ...cell, owner: ownership.ownerId },
+                   tollAmount: toll 
+               });
+            } else {
+               // Should not happen for enemy land unless free
+               setModalState({ isOpen: true, type: 'INFO', cellData: cell });
+            }
          }
        } else {
          // Unowned -> Buy
@@ -164,13 +206,30 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
   const handleModalConfirm = async (selectedBuildings: BuildingState, totalCost: number) => {
     if (!roomId || !currentUser || !modalState.cellData) return;
     
-    // Purchase/Upgrade
-    if (totalCost > 0 && modalState.type === 'BUY_LAND') {
+    // 1. Purchase / Upgrade Land
+    if (modalState.type === 'BUY_LAND' && totalCost > 0) {
         try {
             await GameService.purchaseLand(roomId, currentUser.uid, modalState.cellData.id, totalCost, selectedBuildings);
+            playSound('BUILD');
         } catch (e) {
             console.error(e);
+            playSound('ERROR');
             alert("Purchase failed");
+        }
+    }
+    
+    // 2. Pay Toll
+    if (modalState.type === 'PAY_TOLL') {
+        const ownerId = modalState.cellData.owner;
+        const toll = modalState.tollAmount || 0;
+        if (ownerId && toll > 0) {
+            try {
+                await GameService.payToll(roomId, currentUser.uid, ownerId, toll);
+                playSound('PAY_TOLL');
+            } catch (e) {
+                console.error(e);
+                playSound('ERROR');
+            }
         }
     }
     
@@ -209,6 +268,7 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
         playerBalance={myPlayer?.balance || 0}
         onConfirm={handleModalConfirm}
         onCancel={handleModalCancel}
+        tollAmount={modalState.tollAmount}
       />
 
       {/* Top HUD */}
@@ -217,7 +277,10 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
             {/* Total Assets Dropdown */}
             <div className="relative" ref={dropdownRef}>
                 <button 
-                    onClick={() => setShowAssetDropdown(!showAssetDropdown)}
+                    onClick={() => {
+                        setShowAssetDropdown(!showAssetDropdown);
+                        playSound('CLICK');
+                    }}
                     className={`flex items-center gap-2 md:gap-3 bg-black/50 px-2 md:px-3 py-1.5 rounded-sm border transition-all duration-200 group min-w-max
                     ${showAssetDropdown ? 'border-gold-500 bg-gold-900/20' : 'border-gold-900 hover:border-gold-600'}`}
                 >
@@ -298,7 +361,7 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
         
         <div className="flex items-center gap-2 shrink-0 ml-2">
            <Button variant="ghost" size="sm" icon={<MoreHorizontal size={18} />} className="hidden sm:flex">메뉴</Button>
-           <Button variant="secondary" size="sm" onClick={onQuit} icon={<LogOut size={14} />}>나가기</Button>
+           <Button variant="secondary" size="sm" onClick={handleLeaveGame} icon={<LogOut size={14} />}>나가기</Button>
         </div>
       </div>
 
@@ -316,10 +379,25 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
                    {/* Game Status Message */}
                    <div className="mb-4 h-8 flex items-center justify-center">
                       {roomData.status === 'WAITING' ? (
-                          <div className="flex flex-col items-center gap-2 animate-pulse">
-                              <span className="text-gold-500 font-bold tracking-widest text-sm">WAITING FOR HOST TO START</span>
-                              {myPlayer?.isHost && (
-                                  <Button variant="primary" size="sm" onClick={handleStartGame} icon={<Play size={12}/>} className="mt-2">START GAME</Button>
+                          <div className="flex flex-col items-center gap-2">
+                              {myPlayer?.isHost ? (
+                                  <>
+                                    <span className={`text-xs font-bold tracking-widest ${roomData.currentPlayers >= 3 ? 'text-green-500' : 'text-red-500'}`}>
+                                        {roomData.currentPlayers >= 3 ? 'READY TO START' : 'WAITING FOR PLAYERS (MIN 3)'}
+                                    </span>
+                                    <Button 
+                                        variant="primary" 
+                                        size="sm" 
+                                        onClick={handleStartGame} 
+                                        icon={<Play size={12}/>} 
+                                        className="mt-2"
+                                        disabled={roomData.currentPlayers < 3}
+                                    >
+                                        START GAME
+                                    </Button>
+                                  </>
+                              ) : (
+                                  <span className="text-gold-500 font-bold tracking-widest text-sm animate-pulse">WAITING FOR HOST TO START</span>
                               )}
                           </div>
                       ) : (
@@ -394,7 +472,7 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
                  
                  // Render Players
                  // If it's ME, use `visualPosition` (for smooth animation). For OTHERS, use real DB position.
-                 const playersHere = Object.values(roomData.players).filter((p: Player) => {
+                 const playersHere = (Object.values(roomData.players) as Player[]).filter((p) => {
                      if (p.id === currentUser?.uid) return visualPosition === cell.id;
                      return p.position === cell.id;
                  });
@@ -493,7 +571,7 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
           
           <div className="flex-1 p-4 space-y-3 overflow-y-auto bg-black/20">
              {roomData.playerOrder.map(uid => {
-               const player = roomData.players[uid];
+               const player = roomData.players[uid] as Player;
                return (
                <div key={player.id} className={`p-4 rounded-sm border relative overflow-hidden transition-all 
                     ${player.isBankrupt ? 'bg-red-900/10 border-red-900/30 grayscale' : 'bg-[#151515] border-gray-800'}

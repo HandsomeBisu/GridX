@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, Plus, User, RefreshCw, LogIn } from 'lucide-react';
+import { ArrowLeft, Plus, User, RefreshCw, LogIn, Lock } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { auth } from '../../firebaseConfig';
 import { GameService } from '../../services/gameService';
@@ -64,6 +64,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onBack, onEnterGame }) => {
   };
 
   const isAnonymous = currentUser?.isAnonymous;
+  const selectedRoomData = rooms.find(r => r.id === selectedRoom);
 
   return (
     <div className="flex flex-col h-full w-full max-w-7xl mx-auto p-4 md:p-8">
@@ -148,7 +149,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onBack, onEnterGame }) => {
                     <div className={`font-bold text-lg mb-1 ${selectedRoom === room.id ? 'text-white' : 'text-gray-400 group-hover:text-gold-100'}`}>
                         {room.name}
                     </div>
-                    <div className="text-xs text-gray-600 font-mono">HOST: {Object.values(room.players).find((p: Player) => p.isHost)?.name}</div>
+                    <div className="text-xs text-gray-600 font-mono">HOST: {(Object.values(room.players) as Player[]).find((p) => p.isHost)?.name}</div>
                     </div>
                     <div className="text-right">
                     <div className={`text-xs uppercase font-bold tracking-wider mb-2 px-2 py-1 rounded inline-block ${room.status === 'PLAYING' ? 'bg-red-900/50 text-red-400' : 'bg-green-900/30 text-green-400'}`}>
@@ -171,24 +172,24 @@ export const Lobby: React.FC<LobbyProps> = ({ onBack, onEnterGame }) => {
               {selectedRoom ? '선택된 방 정보' : '준비'}
             </h3>
             
-            {selectedRoom ? (
+            {selectedRoom && selectedRoomData ? (
                <div className="space-y-6">
                  <div className="bg-black/60 p-5 rounded-sm border border-gold-900/80">
                     <p className="text-gray-500 text-xs uppercase tracking-wider mb-2">Room Title</p>
-                    <p className="text-gold-400 text-xl font-bold leading-tight">{rooms.find(r => r.id === selectedRoom)?.name}</p>
+                    <p className="text-gold-400 text-xl font-bold leading-tight">{selectedRoomData.name}</p>
                  </div>
                  
                  <div className="space-y-3">
                    <div className="flex justify-between text-sm border-b border-gray-800 pb-2">
                      <span className="text-gray-500">현재 인원</span>
                      <span className="text-gray-300">
-                        {rooms.find(r => r.id === selectedRoom)?.currentPlayers} / 4
+                        {selectedRoomData.currentPlayers} / 4
                      </span>
                    </div>
                    <div className="flex justify-between text-sm border-b border-gray-800 pb-2">
                      <span className="text-gray-500">상태</span>
-                     <span className="text-gray-300">
-                        {rooms.find(r => r.id === selectedRoom)?.status}
+                     <span className={`${selectedRoomData.status === 'PLAYING' ? 'text-red-400 font-bold' : 'text-green-400'}`}>
+                        {selectedRoomData.status === 'WAITING' ? '대기중' : '진행중'}
                      </span>
                    </div>
                  </div>
@@ -196,7 +197,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onBack, onEnterGame }) => {
                  <div className="text-center py-4">
                      {/* Show players in the room */}
                      <div className="flex gap-2 justify-center flex-wrap">
-                        {rooms.find(r => r.id === selectedRoom)?.players && Object.values(rooms.find(r => r.id === selectedRoom)!.players).map((p: Player) => (
+                        {selectedRoomData.players && Object.values(selectedRoomData.players).map((p: Player) => (
                             <div key={p.id} className="text-xs px-2 py-1 bg-gray-800 rounded border border-gray-600 text-gray-300">
                                 {p.name}
                             </div>
@@ -216,14 +217,17 @@ export const Lobby: React.FC<LobbyProps> = ({ onBack, onEnterGame }) => {
             <Button 
               onClick={handleJoinRoom} 
               className="w-full py-5 text-lg" 
-              disabled={!selectedRoom}
-              variant="primary"
-              icon={<LogIn size={20}/>}
+              disabled={!selectedRoom || selectedRoomData?.status === 'PLAYING'}
+              variant={selectedRoomData?.status === 'PLAYING' ? 'secondary' : 'primary'}
+              icon={selectedRoomData?.status === 'PLAYING' ? <Lock size={20}/> : <LogIn size={20}/>}
             >
-              게임 입장
+              {selectedRoomData?.status === 'PLAYING' ? '게임 진행중' : '게임 입장'}
             </Button>
             {!selectedRoom && (
               <p className="text-center text-xs text-red-500/80 mt-2">입장할 방을 먼저 선택해주세요.</p>
+            )}
+             {selectedRoomData?.status === 'PLAYING' && (
+              <p className="text-center text-xs text-red-500/80 mt-2">이미 진행 중인 게임에는 참가할 수 없습니다.</p>
             )}
           </div>
         </div>
