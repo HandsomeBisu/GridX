@@ -6,18 +6,18 @@ import { GOLDEN_KEYS } from '../data/goldenKeyData';
 
 const ROOMS_COLLECTION = 'rooms';
 
-// Balance Constants (Must match UI)
+// Balance Constants (Updated per request)
 const RATIOS = {
-  LAND_TOLL: 0.1,    // 10%
+  LAND_TOLL: 0.2,    // 20% (Increased from 10%)
   VILLA_COST: 0.5,   
-  VILLA_TOLL: 0.8,   // 80%
+  VILLA_TOLL: 1.5,   // 150% (Increased from 80%)
   BUILD_COST: 1.0,   
-  BUILD_TOLL: 1.2,   // 120%
+  BUILD_TOLL: 2.5,   // 250% (Increased from 120%)
   HOTEL_COST: 1.5,   
-  HOTEL_TOLL: 2.8,   // 280%
+  HOTEL_TOLL: 4.5,   // 450% (Massively Increased from 280%)
 };
 
-const SALARY_AMOUNT = 500000; // Updated to 500k
+const SALARY_AMOUNT = 200000; // Updated to 200k
 const ISLAND_ESCAPE_COST = 200000;
 const TURN_DURATION_MS = 30000; // 30 Seconds
 
@@ -36,7 +36,7 @@ export const GameService = {
     const initialPlayer: Player = {
       id: hostUser.uid,
       name: hostUser.displayName || 'Host',
-      balance: 5000000, 
+      balance: 2500000, // Updated to 2.5M
       color: getRandomColor(),
       position: 0,
       isHost: true,
@@ -82,7 +82,7 @@ export const GameService = {
       const newPlayer: Player = {
         id: user.uid,
         name: user.displayName || 'Guest',
-        balance: 5000000, 
+        balance: 2500000, // Updated to 2.5M
         color: getRandomColor(),
         position: 0,
         isHost: false,
@@ -427,13 +427,14 @@ export const GameService = {
          const cellData = BOARD_DATA.find(c => c.id === cellId);
          if (!cellData || !cellData.price) return;
 
-         let val = cellData.price;
-         if (ownership.buildings.hasVilla) val += cellData.price * RATIOS.VILLA_COST;
-         if (ownership.buildings.hasBuilding) val += cellData.price * RATIOS.BUILD_COST;
-         if (ownership.buildings.hasHotel) val += cellData.price * RATIOS.HOTEL_COST;
+         // Fixed: Calculation now includes buildings
+         let totalInvested = cellData.price;
+         if (ownership.buildings.hasVilla) totalInvested += cellData.price * RATIOS.VILLA_COST;
+         if (ownership.buildings.hasBuilding) totalInvested += cellData.price * RATIOS.BUILD_COST;
+         if (ownership.buildings.hasHotel) totalInvested += cellData.price * RATIOS.HOTEL_COST;
          
-         // CHANGED: 100% Refund
-         const sellAmount = Math.floor(val * 1.0);
+         // 100% Refund of Total Investment
+         const sellAmount = Math.floor(totalInvested);
 
          const newOwnership = { ...roomData.ownership };
          delete newOwnership[cellId];
@@ -530,6 +531,10 @@ export const GameService = {
           if (result.balanceChange !== undefined) {
               updateData[`players.${playerId}.balance`] = player.balance + result.balanceChange;
           }
+          
+          // NOTE: We do not update 'position' here for MOVE types. 
+          // The UI (GameScreen) handles the teleport effect confirmation via GameService.teleportPlayer
+          // This ensures the user sees the card first.
           
           const action: GameAction = {
               type: 'GOLD_KEY',

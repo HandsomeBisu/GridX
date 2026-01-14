@@ -14,6 +14,7 @@ interface GameEventModalProps {
   onConfirm: (selectedBuildings: BuildingState, totalCost: number) => void;
   onCancel: () => void;
   onSell?: (cellIds: number[]) => void; 
+  onDeclareBankruptcy?: () => void; // New Prop
   playerBalance: number;
   tollAmount?: number;
   ownedLands?: BoardCell[]; 
@@ -21,13 +22,13 @@ interface GameEventModalProps {
 }
 
 const RATIOS = {
-  LAND_TOLL: 0.1,    
+  LAND_TOLL: 0.2,    
   VILLA_COST: 0.5,   
-  VILLA_TOLL: 0.8,   
+  VILLA_TOLL: 1.5,   
   BUILD_COST: 1.0,   
-  BUILD_TOLL: 1.2,   
+  BUILD_TOLL: 2.5,   
   HOTEL_COST: 1.5,   
-  HOTEL_TOLL: 2.8,   
+  HOTEL_TOLL: 4.5,   
 };
 
 export const GameEventModal: React.FC<GameEventModalProps> = ({ 
@@ -38,6 +39,7 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
   onConfirm, 
   onCancel,
   onSell,
+  onDeclareBankruptcy,
   playerBalance,
   tollAmount = 0,
   ownedLands = [],
@@ -127,18 +129,16 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
   );
 
   const renderSellLandContent = () => {
-      // Calculate selected total value (Now 100% refund)
-      const totalSellValue = ownedLands
+      const totalSelectedSellValue = ownedLands
         .filter(l => selectedSellIds.includes(l.id))
-        .reduce((sum, land) => sum + (land.price || 0), 0); // Simplified approximation or need exact build cost?
-        // Note: The UI here uses simple price for display. The actual logic in GameService accounts for buildings.
-        // For accurate UI, we should ideally pass the "sellValue" pre-calculated.
-        // However, based on the Service logic: price * (1 + ratio) etc.
-        // Let's assume for UI we display base price but add text saying "Includes buildings".
+        .reduce((sum, land) => sum + (land.price || 0), 0);
         
       const shortage = tollAmount - playerBalance;
-      const remainingAfterSell = (playerBalance + totalSellValue) - tollAmount;
+      const remainingAfterSell = (playerBalance + totalSelectedSellValue) - tollAmount;
       const isEnough = remainingAfterSell >= 0;
+      
+      const allSelected = selectedSellIds.length === ownedLands.length;
+      const isBankruptCondition = allSelected && !isEnough;
 
       const toggleSelection = (id: number) => {
           setSelectedSellIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
@@ -192,7 +192,7 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
                       <div className="text-right font-mono text-red-400">- {formatMoney(tollAmount)}</div>
                       
                       <div className="text-green-500 font-bold">매각 선택 총액</div>
-                      <div className="text-right font-mono text-green-400">+ {formatMoney(totalSellValue)}</div>
+                      <div className="text-right font-mono text-green-400">+ {formatMoney(totalSelectedSellValue)}</div>
                   </div>
                   
                   <div className="border-t border-gray-700 pt-2 flex justify-between items-center">
@@ -202,14 +202,29 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
                       </span>
                   </div>
 
-                  <Button 
-                    variant="primary" 
-                    className={`w-full ${isEnough ? 'bg-green-600 border-green-500' : 'bg-gray-700 border-gray-600 opacity-50'}`} 
-                    disabled={!isEnough}
-                    onClick={() => onSell && onSell(selectedSellIds)}
-                  >
-                      {isEnough ? `${selectedSellIds.length}개 매각 및 지불` : '금액이 부족합니다'}
-                  </Button>
+                  {isBankruptCondition || (ownedLands.length === 0 && !isEnough) ? (
+                      <Button 
+                        variant="primary"
+                        className="w-full bg-red-800 border-red-600 hover:bg-red-700 animate-pulse"
+                        onClick={() => {
+                            if (window.confirm("모든 자산을 매각해도 파산을 면할 수 없습니다. 파산을 선언하시겠습니까?")) {
+                                onDeclareBankruptcy && onDeclareBankruptcy();
+                                onCancel(); // Close modal
+                            }
+                        }}
+                      >
+                         <AlertOctagon size={16} className="mr-2"/> 파산 선언 (지불 불가)
+                      </Button>
+                  ) : (
+                      <Button 
+                        variant="primary" 
+                        className={`w-full ${isEnough ? 'bg-green-600 border-green-500' : 'bg-gray-700 border-gray-600 opacity-50'}`} 
+                        disabled={!isEnough}
+                        onClick={() => onSell && onSell(selectedSellIds)}
+                      >
+                          {isEnough ? `${selectedSellIds.length}개 매각 및 지불` : '금액이 부족합니다'}
+                      </Button>
+                  )}
               </div>
           </div>
       );
@@ -249,53 +264,91 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
     if (!cellData) return null;
     const isSpecialLocation = cellData.type === 'SPECIAL' || cellData.type === 'VEHICLE';
     const basePrice = cellData.price || 0;
+    const isOwned = cellData.owner !== null && cellData.owner !== undefined;
+    
+    // UPDATED LOGIC: 
+    // Unowned -> Can only buy Land.
+    // Owned -> Can select ANY single building that isn't built yet.
     
     let cost = 0;
-    if (selection.hasVilla && !currentBuildings.hasVilla) cost += basePrice * RATIOS.VILLA_COST;
-    if (selection.hasBuilding && !currentBuildings.hasBuilding) cost += basePrice * RATIOS.BUILD_COST;
-    if (selection.hasHotel && !currentBuildings.hasHotel) cost += basePrice * RATIOS.HOTEL_COST;
+    let actionLabel = '건설';
     
+    // Determine what is currently selected (diff between selection and currentBuildings)
+    // We only allow 1 new selection.
+    let selectedUpgrade: keyof BuildingState | null = null;
+    if (selection.hasVilla && !currentBuildings.hasVilla) selectedUpgrade = 'hasVilla';
+    else if (selection.hasBuilding && !currentBuildings.hasBuilding) selectedUpgrade = 'hasBuilding';
+    else if (selection.hasHotel && !currentBuildings.hasHotel) selectedUpgrade = 'hasHotel';
+
+    if (!isOwned) {
+        cost = basePrice;
+        actionLabel = '토지 매입';
+    } else if (!isSpecialLocation && selectedUpgrade) {
+        if (selectedUpgrade === 'hasVilla') {
+            cost = basePrice * RATIOS.VILLA_COST;
+            actionLabel = '별장 건설';
+        } else if (selectedUpgrade === 'hasBuilding') {
+            cost = basePrice * RATIOS.BUILD_COST;
+            actionLabel = '빌딩 건설';
+        } else if (selectedUpgrade === 'hasHotel') {
+            cost = basePrice * RATIOS.HOTEL_COST;
+            actionLabel = '호텔 건설';
+        }
+    }
+    
+    const canAfford = playerBalance >= cost;
+    const hasSelection = !isOwned || !!selectedUpgrade; 
+    const isMaxed = isOwned && currentBuildings.hasVilla && currentBuildings.hasBuilding && currentBuildings.hasHotel && !isSpecialLocation;
+
     // Projected Toll Calculation
     let projectedToll = 0;
     if (isSpecialLocation) {
         projectedToll = cellData.toll || 0;
     } else {
+        // Base land toll
         projectedToll = basePrice * RATIOS.LAND_TOLL;
-        // Check "existing" buildings (if already built) OR "selected" buildings
-        const hasVilla = currentBuildings.hasVilla || selection.hasVilla;
-        const hasBuilding = currentBuildings.hasBuilding || selection.hasBuilding;
-        const hasHotel = currentBuildings.hasHotel || selection.hasHotel;
-
-        if (hasVilla) projectedToll += basePrice * RATIOS.VILLA_TOLL;
-        if (hasBuilding) projectedToll += basePrice * RATIOS.BUILD_TOLL;
-        if (hasHotel) projectedToll += basePrice * RATIOS.HOTEL_TOLL;
+        
+        // Use 'selection' state to calculate projected toll (includes current + new)
+        if (selection.hasVilla) projectedToll += basePrice * RATIOS.VILLA_TOLL;
+        if (selection.hasBuilding) projectedToll += basePrice * RATIOS.BUILD_TOLL;
+        if (selection.hasHotel) projectedToll += basePrice * RATIOS.HOTEL_TOLL;
     }
-    
-    const isOwned = cellData.owner !== null && cellData.owner !== undefined;
-    const landPriceToPay = isOwned ? 0 : basePrice;
-    const totalCost = landPriceToPay + cost;
-    const canAfford = playerBalance >= totalCost;
 
-    const toggleBuilding = (b: keyof BuildingState) => {
-        setSelection(prev => ({ ...prev, [b]: !prev[b] }));
+    const toggleUpgrade = (key: keyof BuildingState) => {
+        // If already built, ignore
+        if (currentBuildings[key]) return;
+        
+        // If clicking the currently selected upgrade, deselect it (revert to current)
+        if (selection[key] && !currentBuildings[key]) {
+            setSelection({ ...currentBuildings });
+            playSound('CLICK');
+            return;
+        }
+
+        // Select new upgrade (and Deselect any other new upgrade by resetting to current first)
+        const newSelection = { ...currentBuildings };
+        newSelection[key] = true;
+        setSelection(newSelection);
         playSound('CLICK');
     };
 
     return (
         <div className="space-y-6">
             <p className="text-gray-400 text-center text-sm">
-                {isOwned ? "추가 건설을 진행합니다." : "이 지역을 매입하고 건물을 건설하세요."}
+                {isOwned 
+                    ? isMaxed ? "더 이상 건설할 수 없습니다." : "원하는 건물을 선택하여 건설하세요. (방문 당 1채)"
+                    : "이 지역은 아직 소유자가 없습니다. 토지를 매입하세요."}
             </p>
 
-            {/* Base Land Info (Only if not owned yet) */}
-            {!isOwned && (
-                <div className="flex justify-between items-center bg-white/5 p-3 rounded border border-gold-500/30">
-                    <span className="font-bold text-gray-200">🚩 토지 매입</span>
-                    <span className="font-mono text-gold-400">₩ {formatMoney(basePrice).replace('₩ ', '')}</span>
-                </div>
-            )}
+            {/* Base Land Info */}
+            <div className={`flex justify-between items-center p-3 rounded border ${!isOwned ? 'bg-gold-900/20 border-gold-500' : 'bg-white/5 border-gray-700'}`}>
+                <span className="font-bold text-gray-200">🚩 토지</span>
+                <span className="font-mono text-gold-400">
+                    {isOwned ? "소유중" : `₩ ${formatMoney(basePrice).replace('₩ ', '')}`}
+                </span>
+            </div>
 
-            {/* Buildings Selection */}
+            {/* Buildings Selection Grid */}
             {!isSpecialLocation && (
                 <div className="grid grid-cols-3 gap-3">
                     {[
@@ -304,37 +357,39 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
                         { key: 'hasHotel', label: '호텔', icon: <Hotel size={16}/>, cost: basePrice * RATIOS.HOTEL_COST },
                     ].map((item) => {
                          const isBuilt = currentBuildings[item.key as keyof BuildingState];
-                         const isSelected = selection[item.key as keyof BuildingState];
+                         const isSelected = selection[item.key as keyof BuildingState] && !isBuilt;
                          
                          return (
                              <button 
                                 key={item.key}
-                                onClick={() => !isBuilt && toggleBuilding(item.key as keyof BuildingState)}
-                                disabled={isBuilt}
+                                onClick={() => isOwned && toggleUpgrade(item.key as keyof BuildingState)}
+                                disabled={!isOwned || isBuilt}
                                 className={`flex flex-col items-center justify-center p-3 rounded border transition-all relative overflow-hidden
                                 ${isBuilt 
-                                    ? 'bg-gray-800 border-gray-700 text-gray-600 cursor-not-allowed opacity-50' 
+                                    ? 'bg-blue-900/30 border-blue-500 text-blue-300 opacity-60 cursor-default' 
                                     : isSelected
-                                        ? 'bg-gold-600 border-gold-400 text-white shadow-[0_0_15px_rgba(245,132,26,0.4)]'
-                                        : 'bg-black/40 border-gray-700 text-gray-400 hover:border-gold-500/50 hover:bg-gold-900/10'
+                                        ? 'bg-gold-600 border-gold-400 text-white shadow-[0_0_15px_rgba(245,132,26,0.4)] scale-105 z-10'
+                                        : isOwned 
+                                            ? 'bg-black/40 border-gray-600 text-gray-400 hover:border-gold-500 hover:bg-gold-900/10 cursor-pointer'
+                                            : 'bg-black/20 border-gray-800 text-gray-600 opacity-30 cursor-not-allowed'
                                 }`}
                              >
                                  {item.icon}
                                  <span className="text-xs font-bold mt-2 mb-1">{item.label}</span>
                                  <span className="text-[10px] font-mono opacity-80">{formatMoney(item.cost).replace('₩ ', '')}</span>
-                                 {isBuilt && <div className="absolute top-1 right-1 text-green-500"><Check size={12}/></div>}
-                                 {isSelected && !isBuilt && <div className="absolute top-1 right-1 text-white"><Check size={12}/></div>}
+                                 {isBuilt && <div className="absolute top-1 right-1 text-blue-400"><Check size={12}/></div>}
+                                 {isSelected && <div className="absolute top-1 right-1 text-white"><Check size={12}/></div>}
                              </button>
                          );
                     })}
                 </div>
             )}
 
-            {/* NEW: Estimated Toll Info */}
+            {/* Projected Toll Info */}
             <div className="bg-blue-900/20 border border-blue-500/30 p-3 rounded flex justify-between items-center">
                 <div className="flex items-center gap-2 text-blue-400">
                     <Calculator size={16}/>
-                    <span className="text-xs font-bold uppercase">예상 통행료</span>
+                    <span className="text-xs font-bold uppercase">{isOwned ? "업그레이드 후 통행료" : "매입 후 예상 통행료"}</span>
                 </div>
                 <div className="font-mono font-bold text-white">₩ {formatMoney(projectedToll).replace('₩ ', '')}</div>
             </div>
@@ -342,16 +397,20 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
             {/* Total Cost & Action */}
              <div className="bg-black/60 p-4 rounded border border-gold-900/50 flex flex-col gap-4">
                  <div className="flex justify-between items-end border-b border-gray-800 pb-3">
-                     <span className="text-sm text-gray-400">총 소요 비용</span>
+                     <span className="text-sm text-gray-400">필요 비용</span>
                      <span className={`text-2xl font-black font-mono ${canAfford ? 'text-gold-400' : 'text-red-500'}`}>
-                         {formatMoney(totalCost)}
+                         {formatMoney(cost)}
                      </span>
                  </div>
                  <div className="flex gap-3">
-                     <Button variant="secondary" className="flex-1" onClick={onCancel}>건너뛰기</Button>
-                     <Button variant="primary" className="flex-[2]" disabled={!canAfford || (totalCost === 0 && isOwned)} onClick={() => onConfirm(selection, totalCost)}>
-                         {isOwned ? '건설하기' : '매입하기'}
+                     <Button variant="secondary" className="flex-1" onClick={onCancel}>
+                        {isOwned ? "종료" : "건너뛰기"}
                      </Button>
+                     {!isMaxed && (
+                        <Button variant="primary" className="flex-[2]" disabled={!canAfford || !hasSelection} onClick={() => onConfirm(selection, cost)}>
+                            {actionLabel}
+                        </Button>
+                     )}
                  </div>
             </div>
         </div>
@@ -386,9 +445,6 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
                 onClick={() => {
                     if (playerBalance < tollAmount) {
                        // Logic handled via parent switch to SELL_LAND
-                       // But visual button disabled, user must wait or parent handles state
-                       // Actually, if balance < toll, GameScreen usually sets mode to SELL_LAND directly.
-                       // But if we are here, maybe balance dropped or initial check passed?
                     } else {
                         onConfirm(selection, 0);
                     }

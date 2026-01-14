@@ -72,19 +72,20 @@ export const GameRulesModal: React.FC<GameRulesModalProps> = ({ isOpen, onClose 
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                  <Card icon={<Coins className="text-green-400"/>} title="초기 자금">
-                    모든 플레이어는 <span className="text-green-400 font-bold font-mono">₩ 5,000,000</span> (500만원)을 가지고 시작합니다.
+                    모든 플레이어는 <span className="text-green-400 font-bold font-mono">₩ 2,500,000</span> (250만원)을 가지고 시작합니다.
                  </Card>
                  <Card icon={<RefreshCw className="text-blue-400"/>} title="월급 시스템">
-                    출발지(START)를 지나거나 도착할 때마다 <span className="text-blue-400 font-bold font-mono">₩ 500,000</span>의 월급을 받습니다.
+                    출발지(START)를 지나거나 도착할 때마다 <span className="text-blue-400 font-bold font-mono">₩ 200,000</span>의 월급을 받습니다.
                  </Card>
               </div>
 
               <Section title="게임 진행" color="text-white">
                 <ol className="list-decimal list-inside space-y-2 text-gray-400 text-sm">
                   <li>자신의 턴이 되면 주사위 2개를 굴립니다.</li>
-                  <li>나온 수의 합만큼 시계 방향으로 이동합니다. (더블 시 한 번 더!)</li>
-                  <li>도착한 칸의 소유자가 없으면 <strong>건설/매입</strong> 할 수 있습니다.</li>
-                  <li>이미 소유자가 있다면 <strong>통행료</strong>를 지불해야 합니다.</li>
+                  <li>나온 수의 합만큼 시계 방향으로 이동합니다.</li>
+                  <li>도착한 칸의 소유자가 없으면 <strong>토지를 매입</strong> 할 수 있습니다.</li>
+                  <li>이미 소유한 칸에 도착하면 <strong>건물을 1개</strong> 건설할 수 있습니다.</li>
+                  <li>다른 사람의 칸에 도착하면 <strong>통행료</strong>를 지불해야 합니다.</li>
                 </ol>
               </Section>
             </div>
@@ -92,10 +93,13 @@ export const GameRulesModal: React.FC<GameRulesModalProps> = ({ isOpen, onClose 
 
           {activeTab === 'BUILD' && (
             <div className="space-y-8 animate-fade-in-up">
-              <Section title="건설 시스템" color="text-blue-400">
+              <Section title="자유 건설 시스템" color="text-blue-400">
                 <p className="text-gray-300 mb-4">
-                  도시에 건물을 지으면 통행료가 기하급수적으로 상승합니다.<br/>
-                  한 번에 <span className="text-blue-400">별장, 빌딩, 호텔</span>을 모두 지을 수도 있습니다.
+                  첫 방문 시에는 토지 매입만 가능합니다.<br/>
+                  이후 자신의 땅을 방문할 때마다, <strong>아직 짓지 않은 건물 중 하나</strong>를 선택해 건설할 수 있습니다.<br/>
+                  (예: 별장 없이 바로 호텔 건설 가능)
+                  <br/><br/>
+                  <span className="text-blue-400 font-bold">※ 방문 당 최대 1개의 건물만 건설 가능합니다.</span>
                 </p>
                 <div className="grid grid-cols-3 gap-4 text-center">
                     <BuildingCard type="별장" multiplier="x 0.8" color="bg-blue-500" />
@@ -106,9 +110,9 @@ export const GameRulesModal: React.FC<GameRulesModalProps> = ({ isOpen, onClose 
 
               <Section title="통행료 규칙" color="text-red-400">
                 <div className="bg-red-900/10 border border-red-500/20 p-4 rounded text-sm text-gray-300 space-y-2">
-                    <p>• <strong>기본 통행료:</strong> 땅값의 10%</p>
-                    <p>• <strong>건물 통행료:</strong> 각 건물의 가치가 합산되어 계산됩니다.</p>
-                    <p className="text-red-400 font-bold mt-2">※ 자금이 부족하면 자산을 매각해야 하며, 모든 자산을 팔아도 부족하면 파산합니다.</p>
+                    <p>• <strong>기본 통행료:</strong> 땅값의 20%</p>
+                    <p>• <strong>건물 통행료:</strong> 건설된 모든 건물의 가치가 합산됩니다.</p>
+                    <p className="text-red-400 font-bold mt-2">※ 건물을 많이 지을수록 통행료가 크게 증가하여 상대를 빠르게 파산시킬 수 있습니다.</p>
                 </div>
               </Section>
             </div>

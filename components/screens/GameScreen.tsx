@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Skull, Crown, HandCoins } from 'lucide-react';
+import { Skull, Crown, HandCoins, RotateCw } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { GameEventModal, ModalType } from '../game/GameEventModal';
 import { GameRulesModal } from '../ui/GameRulesModal'; // Import Rules Modal
@@ -52,6 +52,7 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
   // Effects State
   const [floatingTexts, setFloatingTexts] = useState<FloatingTextData[]>([]);
   const [receivedToll, setReceivedToll] = useState<{from: string, amount: number} | null>(null);
+  const [salaryNotification, setSalaryNotification] = useState<boolean>(false); // NEW: Salary Popup
   const [showRules, setShowRules] = useState(false); // Rules Modal State
   const [showTurnEffect, setShowTurnEffect] = useState(false);
   
@@ -168,6 +169,12 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
              const payerName = roomData.players[action.subjectId]?.name || '알 수 없음';
              setReceivedToll({ from: payerName, amount: action.amount || 0 });
              const timer = setTimeout(() => { setReceivedToll(null); }, 4000);
+         }
+         
+         if (action.type === 'MOVE' && action.subjectId === currentUser.uid && action.message.includes('월급')) {
+            playSound('BUILD');
+            setSalaryNotification(true);
+            setTimeout(() => { setSalaryNotification(false); }, 3000);
          }
          
          if (action.type === 'ESCAPE_FAIL' && action.subjectId === currentUser.uid) {
@@ -628,6 +635,7 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
         onConfirm={handleModalConfirm}
         onCancel={handleModalCancel}
         onSell={handleSellAssets}
+        onDeclareBankruptcy={handleDeclareBankruptcy} // Pass Bankruptcy Handler
         tollAmount={modalState.tollAmount}
         ownedLands={myOwnedCells}
         goldenKeyData={modalState.goldenKeyData}
@@ -646,6 +654,25 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
                           <span className="font-bold text-yellow-200">{receivedToll.from}</span>
                           <span className="text-gray-400 text-sm mx-2">▶</span>
                           <span className="font-mono font-black text-green-400 text-2xl">+{formatPrice(receivedToll.amount)}</span>
+                      </p>
+                  </div>
+              </div>
+          </div>
+      )}
+
+      {/* Salary Notification Popup (Reuse logic) */}
+      {salaryNotification && (
+          <div className="absolute top-24 left-1/2 transform -translate-x-1/2 z-[110] bg-gradient-to-r from-blue-600 to-cyan-500 p-[1px] rounded-lg shadow-[0_0_50px_rgba(59,130,246,0.5)] animate-fade-in-up">
+              <div className="bg-black/95 px-8 py-4 rounded-lg flex items-center gap-5 backdrop-blur-xl">
+                  <div className="bg-blue-500 p-3 rounded-full animate-bounce shadow-lg">
+                      <RotateCw size={28} className="text-white"/>
+                  </div>
+                  <div>
+                      <p className="text-blue-400 text-xs font-bold uppercase tracking-widest mb-1">완주 보너스 (월급)</p>
+                      <p className="text-white text-xl">
+                          <span className="text-gray-300">Start Point Passed</span>
+                          <span className="text-gray-400 text-sm mx-2">▶</span>
+                          <span className="font-mono font-black text-green-400 text-2xl">+20만</span>
                       </p>
                   </div>
               </div>
