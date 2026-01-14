@@ -17,6 +17,10 @@ const RATIOS = {
   HOTEL_TOLL: 2.8,   // 280%
 };
 
+const SALARY_AMOUNT = 500000; // Updated to 500k
+const ISLAND_ESCAPE_COST = 200000;
+const TURN_DURATION_MS = 30000; // 30 Seconds
+
 const generateRoomId = () => Math.random().toString(36).substring(2, 6).toUpperCase();
 
 const getRandomColor = () => {
@@ -32,13 +36,14 @@ export const GameService = {
     const initialPlayer: Player = {
       id: hostUser.uid,
       name: hostUser.displayName || 'Host',
-      balance: 5000000, // 500만 원 (Starting Balance)
+      balance: 5000000, 
       color: getRandomColor(),
       position: 0,
       isHost: true,
       isBankrupt: false,
       assets: 0,
       isTurn: true,
+      islandTurns: 0,
     };
 
     const newRoom: GameRoom = {
@@ -54,6 +59,7 @@ export const GameService = {
       currentTurnIndex: 0,
       createdAt: Date.now(),
       welfareFund: 0,
+      // No turn deadline in waiting state
     };
 
     await setDoc(roomRef, newRoom);
@@ -70,19 +76,20 @@ export const GameService = {
       const roomData = roomDoc.data() as GameRoom;
       
       if (roomData.players[user.uid]) return;
-      if (roomData.status === 'PLAYING') throw new Error("이미 게임이 진행 중입니다.");
+      if (roomData.status !== 'WAITING') throw new Error("이미 게임이 진행 중이거나 종료되었습니다.");
       if (roomData.currentPlayers >= roomData.maxPlayers) throw new Error("방이 꽉 찼습니다.");
 
       const newPlayer: Player = {
         id: user.uid,
         name: user.displayName || 'Guest',
-        balance: 5000000, // 500만 원
+        balance: 5000000, 
         color: getRandomColor(),
         position: 0,
         isHost: false,
         isBankrupt: false,
         assets: 0,
         isTurn: false,
+        islandTurns: 0,
       };
 
       transaction.update(roomRef, {
@@ -135,12 +142,77 @@ export const GameService = {
         if (!roomDoc.exists()) throw "Room not found";
         const roomData = roomDoc.data() as GameRoom;
 
-        if (roomData.currentPlayers < 3) {
-            throw new Error("게임을 시작하려면 최소 3명의 플레이어가 필요합니다.");
+        if (roomData.currentPlayers < 2) { 
+            throw new Error("게임을 시작하려면 최소 2명의 플레이어가 필요합니다.");
         }
 
-        transaction.update(roomRef, { status: 'PLAYING' });
+        // Set deadline for the first player
+        transaction.update(roomRef, { 
+            status: 'PLAYING',
+            turnDeadline: Date.now() + TURN_DURATION_MS 
+        });
     });
+  },
+
+  // Auto-pass turn if time is up
+  forceEndTurn: async (roomId: string, playerId: string) => {
+      const roomRef = doc(db, ROOMS_COLLECTION, roomId);
+      await runTransaction(db, async (transaction) => {
+          const roomDoc = await transaction.get(roomRef);
+          if (!roomDoc.exists()) return;
+          const roomData = roomDoc.data() as GameRoom;
+          
+          // Double check if it's actually their turn and time is up
+          if (roomData.players[playerId].isTurn) {
+               // Logic similar to endTurn but with TIMEOUT message
+               let nextIdx = (roomData.currentTurnIndex + 1) % roomData.playerOrder.length;
+               let loops = 0;
+               while (roomData.players[roomData.playerOrder[nextIdx]].isBankrupt && loops < roomData.playerOrder.length) {
+                   nextIdx = (nextIdx + 1) % roomData.playerOrder.length;
+                   loops++;
+               }
+               const nextPlayerId = roomData.playerOrder[nextIdx];
+
+               transaction.update(roomRef, {
+                   currentTurnIndex: nextIdx,
+                   [`players.${playerId}.isTurn`]: false,
+                   [`players.${nextPlayerId}.isTurn`]: true,
+                   turnDeadline: Date.now() + TURN_DURATION_MS,
+                   lastAction: {
+                       type: 'TIMEOUT',
+                       message: '시간 초과! 턴이 강제로 넘어갑니다.',
+                       subjectId: playerId,
+                       timestamp: Date.now()
+                   }
+               });
+          }
+      });
+  },
+
+  escapeIsland: async (roomId: string, playerId: string) => {
+      const roomRef = doc(db, ROOMS_COLLECTION, roomId);
+      await runTransaction(db, async (transaction) => {
+          const roomDoc = await transaction.get(roomRef);
+          if (!roomDoc.exists()) throw "Room not found";
+          const roomData = roomDoc.data() as GameRoom;
+          const player = roomData.players[playerId];
+
+          if (player.balance < ISLAND_ESCAPE_COST) throw "잔액이 부족합니다.";
+
+          const action: GameAction = {
+              type: 'ESCAPE_SUCCESS',
+              message: '탈출 비용 지불 및 석방',
+              subjectId: playerId,
+              amount: ISLAND_ESCAPE_COST,
+              timestamp: Date.now()
+          };
+
+          transaction.update(roomRef, {
+              [`players.${playerId}.balance`]: player.balance - ISLAND_ESCAPE_COST,
+              [`players.${playerId}.islandTurns`]: 0,
+              lastAction: action
+          });
+      });
   },
 
   rollDice: async (roomId: string, playerId: string) => {
@@ -158,15 +230,64 @@ export const GameService = {
       const d1 = Math.floor(Math.random() * 6) + 1;
       const d2 = Math.floor(Math.random() * 6) + 1;
       const totalSteps = d1 + d2;
-      
+      const isDouble = d1 === d2;
+
+      // Reset deadline on roll to give time to act, or pause it?
+      // Usually monopoly pauses timer during decision.
+      // We will set it to very far future or null during interaction, then reset on endTurn.
+      // For simplicity, let's extend it by 60s for decision making.
+      const decisionTime = Date.now() + 60000; 
+
+      // Island Logic
+      if (player.islandTurns > 0) {
+          if (isDouble) {
+               const action: GameAction = {
+                  type: 'ESCAPE_SUCCESS',
+                  message: `더블! 무인도 탈출 성공 (${d1},${d2})`,
+                  subjectId: playerId,
+                  timestamp: Date.now()
+              };
+              
+              let newPosition = (player.position + totalSteps) % 40;
+              transaction.update(roomRef, {
+                  [`players.${playerId}.islandTurns`]: 0,
+                  [`players.${playerId}.position`]: newPosition,
+                  lastDiceValues: [d1, d2],
+                  lastAction: action,
+                  turnDeadline: decisionTime
+              });
+          } else {
+              const nextTurns = player.islandTurns - 1;
+              const action: GameAction = {
+                  type: 'ESCAPE_FAIL',
+                  message: nextTurns > 0 ? `탈출 실패.. 남은 턴: ${nextTurns}` : `무인도 형기 종료. 다음 턴에 이동.`,
+                  subjectId: playerId,
+                  timestamp: Date.now()
+              };
+
+              transaction.update(roomRef, {
+                  [`players.${playerId}.islandTurns`]: nextTurns,
+                  lastDiceValues: [d1, d2],
+                  lastAction: action,
+                  turnDeadline: decisionTime // Still need to end turn manually
+              });
+          }
+          return;
+      }
+
+      // Normal Move
       let newPosition = (player.position + totalSteps) % 40;
-      
       let newBalance = player.balance;
       let salaryMsg = '';
       
       if (newPosition < player.position) {
-          newBalance += 300000; // Salary
+          newBalance += SALARY_AMOUNT; 
           salaryMsg = ' (월급 수령)';
+      }
+
+      let islandTurns = 0;
+      if (newPosition === 20) {
+          islandTurns = 3;
       }
 
       const action: GameAction = {
@@ -179,40 +300,36 @@ export const GameService = {
       transaction.update(roomRef, {
         [`players.${playerId}.position`]: newPosition,
         [`players.${playerId}.balance`]: newBalance,
+        [`players.${playerId}.islandTurns`]: islandTurns,
         lastDiceValues: [d1, d2],
-        lastAction: action
+        lastAction: action,
+        turnDeadline: decisionTime
       });
     });
   },
 
-  // Space Travel Teleport
   teleportPlayer: async (roomId: string, playerId: string, targetPos: number) => {
       const roomRef = doc(db, ROOMS_COLLECTION, roomId);
       await runTransaction(db, async (transaction) => {
           const roomDoc = await transaction.get(roomRef);
           if (!roomDoc.exists()) throw "Room not found";
-          const roomData = roomDoc.data() as GameRoom;
-          const player = roomData.players[playerId];
-          
-          if (!player.isTurn) throw "Not your turn";
-          
-          // Note: Typically Space Travel is a direct teleport, no salary.
           
           const action: GameAction = {
               type: 'TELEPORT',
-              message: `우주여행으로 이동`,
+              message: targetPos === 20 ? '무인도로 강제 이동' : '이동',
               subjectId: playerId,
               timestamp: Date.now()
           };
 
           transaction.update(roomRef, {
               [`players.${playerId}.position`]: targetPos,
-              lastAction: action
+              [`players.${playerId}.islandTurns`]: targetPos === 20 ? 3 : 0,
+              lastAction: action,
+              turnDeadline: Date.now() + 60000 // Give time to act after teleport
           });
       });
   },
 
-  // Pay into Welfare Fund
   payWelfareFund: async (roomId: string, playerId: string, amount: number) => {
       const roomRef = doc(db, ROOMS_COLLECTION, roomId);
       await runTransaction(db, async (transaction) => {
@@ -238,7 +355,6 @@ export const GameService = {
       });
   },
 
-  // Receive Welfare Fund
   receiveWelfareFund: async (roomId: string, playerId: string) => {
       const roomRef = doc(db, ROOMS_COLLECTION, roomId);
       return await runTransaction(db, async (transaction) => {
@@ -247,7 +363,7 @@ export const GameService = {
           const roomData = roomDoc.data() as GameRoom;
           
           const fund = roomData.welfareFund || 0;
-          if (fund === 0) return 0; // Nothing to receive
+          if (fund === 0) return 0; 
           
           const player = roomData.players[playerId];
 
@@ -279,7 +395,6 @@ export const GameService = {
         const player = roomDoc.data().players[playerId];
         if (player.balance < cost) throw "Insufficient funds";
 
-        // Calculate simplified toll
         const cellData = BOARD_DATA.find(c => c.id === cellId);
         let newToll = 0;
 
@@ -328,7 +443,6 @@ export const GameService = {
          const ownership = roomData.ownership[cellId];
          if (!ownership || ownership.ownerId !== playerId) throw "Not owner";
 
-         // Sell price = 50% of base price + buildings
          const cellData = BOARD_DATA.find(c => c.id === cellId);
          if (!cellData || !cellData.price) return;
 
@@ -339,7 +453,6 @@ export const GameService = {
          
          const sellAmount = Math.floor(val * 0.5);
 
-         // Remove ownership entry
          const newOwnership = { ...roomData.ownership };
          delete newOwnership[cellId];
 
@@ -371,7 +484,7 @@ export const GameService = {
         const payer = roomData.players[payerId];
         const owner = roomData.players[ownerId];
         
-        if (payer.balance < amount) throw "INSUFFICIENT_FUNDS"; // Force user to sell
+        const newPayerBalance = payer.balance - amount;
 
         const action: GameAction = {
             type: 'PAY_TOLL',
@@ -383,19 +496,47 @@ export const GameService = {
         };
 
         transaction.update(roomRef, {
-            [`players.${payerId}.balance`]: payer.balance - amount,
+            [`players.${payerId}.balance`]: newPayerBalance,
             [`players.${ownerId}.balance`]: owner.balance + amount,
             lastAction: action
         });
     });
   },
 
+  declareBankruptcy: async (roomId: string, playerId: string) => {
+      const roomRef = doc(db, ROOMS_COLLECTION, roomId);
+      await runTransaction(db, async (transaction) => {
+          const roomDoc = await transaction.get(roomRef);
+          if (!roomDoc.exists()) throw "Room";
+          const roomData = roomDoc.data() as GameRoom;
+
+          const newOwnership = { ...roomData.ownership };
+          Object.keys(newOwnership).forEach(key => {
+              if (newOwnership[key].ownerId === playerId) {
+                  delete newOwnership[key];
+              }
+          });
+
+          transaction.update(roomRef, {
+              ownership: newOwnership,
+              [`players.${playerId}.isBankrupt`]: true,
+              [`players.${playerId}.balance`]: 0,
+              lastAction: {
+                  type: 'BANKRUPT',
+                  message: '파산 선언! 게임에서 탈락합니다.',
+                  subjectId: playerId,
+                  timestamp: Date.now()
+              }
+          });
+      });
+      await GameService.endTurn(roomId); 
+  },
+
   applyGoldenKey: async (roomId: string, playerId: string) => {
       const roomRef = doc(db, ROOMS_COLLECTION, roomId);
-      // Random Key
       const key = GOLDEN_KEYS[Math.floor(Math.random() * GOLDEN_KEYS.length)];
 
-      await runTransaction(db, async (transaction) => {
+      return await runTransaction(db, async (transaction) => {
           const roomDoc = await transaction.get(roomRef);
           if (!roomDoc.exists()) throw "Room";
           const player = roomDoc.data().players[playerId];
@@ -404,29 +545,23 @@ export const GameService = {
           
           let updateData: any = {};
           
-          if (result.newPos !== undefined) {
-              updateData[`players.${playerId}.position`] = result.newPos;
-              // Check pass start logic if moving forward
-              if (result.newPos < player.position && key.type === 'MOVE' && result.newPos !== 20) { 
-                 // Simple check for wrapping around (except move to island/prison)
-                 // NOTE: This is simplified.
-              }
-          }
           if (result.balanceChange !== undefined) {
               updateData[`players.${playerId}.balance`] = player.balance + result.balanceChange;
           }
-
+          
           const action: GameAction = {
               type: 'GOLD_KEY',
-              message: `황금열쇠: ${key.title} (${result.message})`,
+              message: `황금열쇠: ${key.title}`, 
               subjectId: playerId,
+              amount: result.balanceChange,
               timestamp: Date.now()
           };
 
           updateData.lastAction = action;
           transaction.update(roomRef, updateData);
+          
+          return { key, result };
       });
-      return key;
   },
 
   endTurn: async (roomId: string) => {
@@ -437,9 +572,26 @@ export const GameService = {
           if (!roomDoc.exists()) throw "Room not found";
           const roomData = roomDoc.data() as GameRoom;
 
+          // Check Win Condition
+          const activePlayers = roomData.playerOrder.filter(uid => !roomData.players[uid].isBankrupt);
+          if (activePlayers.length === 1 && roomData.status === 'PLAYING') {
+              transaction.update(roomRef, {
+                  status: 'FINISHED',
+                  winnerId: activePlayers[0],
+                  lastAction: {
+                      type: 'WIN',
+                      message: '게임 종료! 승자가 결정되었습니다.',
+                      subjectId: activePlayers[0],
+                      timestamp: Date.now()
+                  }
+              });
+              return;
+          }
+
           let nextIdx = (roomData.currentTurnIndex + 1) % roomData.playerOrder.length;
-          
           let loops = 0;
+          
+          // Skip bankrupt players
           while (roomData.players[roomData.playerOrder[nextIdx]].isBankrupt && loops < roomData.playerOrder.length) {
               nextIdx = (nextIdx + 1) % roomData.playerOrder.length;
               loops++;
@@ -452,6 +604,7 @@ export const GameService = {
               currentTurnIndex: nextIdx,
               [`players.${currentPlayerId}.isTurn`]: false,
               [`players.${nextPlayerId}.isTurn`]: true,
+              turnDeadline: Date.now() + TURN_DURATION_MS,
               lastAction: {
                   type: 'START_TURN',
                   message: '턴 종료',

@@ -1,7 +1,4 @@
 // Simple Sound Utility using HTML5 Audio
-// In a real production app, you would host these files on a CDN or in the public folder.
-// Using short generic sound URLs for demonstration.
-
 export const SOUNDS = {
   CLICK: 'https://assets.mixkit.co/active_storage/sfx/2571/2571-preview.mp3', // Pop click
   DICE_ROLL: 'https://assets.mixkit.co/active_storage/sfx/2003/2003-preview.mp3', // Rolling
@@ -12,9 +9,19 @@ export const SOUNDS = {
   ERROR: 'https://assets.mixkit.co/active_storage/sfx/2573/2573-preview.mp3', // Error beep
 };
 
+const audioCache: Record<string, HTMLAudioElement> = {};
+
+// Preload sounds
+Object.values(SOUNDS).forEach(url => {
+    const audio = new Audio(url);
+    audio.load();
+});
+
 export const playSound = (soundName: keyof typeof SOUNDS) => {
   try {
-    const audio = new Audio(SOUNDS[soundName]);
+    const url = SOUNDS[soundName];
+    // Always create new audio for overlapping sounds (essential for rapid movement steps)
+    const audio = new Audio(url);
     audio.volume = 0.5;
     audio.play().catch(e => {
       // Ignore autoplay policy errors usually happen if no user interaction yet

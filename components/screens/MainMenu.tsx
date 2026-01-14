@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { Users, ShoppingBag, Trophy, ArrowRight, User } from 'lucide-react';
+import { Users, ShoppingBag, Trophy, ArrowRight, User, BookOpen } from 'lucide-react';
 import { Button } from '../ui/Button';
+import { GameRulesModal } from '../ui/GameRulesModal';
 import { auth } from '../../firebaseConfig';
 import { GoogleAuthProvider, signInWithPopup, signInAnonymously, updateProfile } from 'firebase/auth';
 
@@ -14,6 +15,7 @@ export const MainMenu: React.FC<MainMenuProps> = ({ onJoin }) => {
   const [nickname, setNickname] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showRules, setShowRules] = useState(false); // State for Rules Modal
 
   // Google Login (Host)
   const handleHostLogin = async () => {
@@ -55,6 +57,9 @@ export const MainMenu: React.FC<MainMenuProps> = ({ onJoin }) => {
   return (
     <div className="flex flex-col items-center justify-center h-full w-full p-6 relative z-20 overflow-hidden">
       
+      {/* Game Rules Modal */}
+      <GameRulesModal isOpen={showRules} onClose={() => setShowRules(false)} />
+
       {/* Background Ambient Effects */}
       <div className="absolute top-1/4 left-1/4 w-96 h-96 bg-gold-500/10 rounded-full blur-[100px] animate-pulse-slow pointer-events-none" />
       <div className="absolute bottom-1/4 right-1/4 w-64 h-64 bg-red-600/10 rounded-full blur-[80px] animate-pulse-slow pointer-events-none" style={{ animationDelay: '2s' }} />
@@ -108,7 +113,14 @@ export const MainMenu: React.FC<MainMenuProps> = ({ onJoin }) => {
                 
                 <div className="flex gap-3 pt-2">
                      <Button variant="ghost" className="flex-1 border border-white/5 bg-black/30" icon={<ShoppingBag size={16} />}>상점</Button>
-                     <Button variant="ghost" className="flex-1 border border-white/5 bg-black/30" icon={<Trophy size={16} />}>랭킹</Button>
+                     <Button 
+                        variant="ghost" 
+                        className="flex-1 border border-white/5 bg-black/30 text-gold-400" 
+                        icon={<BookOpen size={16} />}
+                        onClick={() => setShowRules(true)}
+                     >
+                        게임 규칙
+                     </Button>
                 </div>
             </div>
         ) : (

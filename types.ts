@@ -31,6 +31,7 @@ export interface Player {
   isBankrupt: boolean;
   assets: number;
   isTurn: boolean;
+  islandTurns: number; // 0 means free, > 0 means stuck in island
 }
 
 // Phase 4: Building & Ownership Logic
@@ -48,7 +49,7 @@ export interface LandOwnership {
 
 // New: For Event Logs
 export interface GameAction {
-  type: 'MOVE' | 'BUY' | 'PAY_TOLL' | 'SELL' | 'GOLD_KEY' | 'START_TURN' | 'WELFARE' | 'TELEPORT';
+  type: 'MOVE' | 'BUY' | 'PAY_TOLL' | 'SELL' | 'GOLD_KEY' | 'START_TURN' | 'WELFARE' | 'TELEPORT' | 'ESCAPE_FAIL' | 'ESCAPE_SUCCESS' | 'BANKRUPT' | 'WIN' | 'TIMEOUT';
   message: string;
   subjectId: string; // Player who did action
   targetId?: string; // Player who received money (optional)
@@ -74,7 +75,7 @@ export interface GameRoom {
   hostId: string;
   maxPlayers: number;
   currentPlayers: number;
-  status: 'WAITING' | 'PLAYING';
+  status: 'WAITING' | 'PLAYING' | 'FINISHED';
   players: Record<string, Player>; // Map of UID -> Player Data
   playerOrder: string[]; // Array of UIDs to determine turn order
   ownership: Record<string, LandOwnership>; // Map of Cell ID (string) -> Ownership
@@ -82,5 +83,7 @@ export interface GameRoom {
   lastDiceValues?: [number, number]; // Sync dice result
   lastAction?: GameAction; // Last event for UI logs
   welfareFund: number; // Accumulated Welfare Fund
+  turnDeadline?: number; // Timestamp for when the current turn must end
   createdAt: number;
+  winnerId?: string;
 }

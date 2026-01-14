@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { ArrowLeft, Plus, User, RefreshCw, LogIn, Lock } from 'lucide-react';
+import { ArrowLeft, Plus, User, RefreshCw, LogIn, Lock, BookOpen } from 'lucide-react';
 import { Button } from '../ui/Button';
+import { GameRulesModal } from '../ui/GameRulesModal';
 import { auth } from '../../firebaseConfig';
 import { GameService } from '../../services/gameService';
 import { GameRoom, Player } from '../../types';
@@ -16,6 +17,7 @@ export const Lobby: React.FC<LobbyProps> = ({ onBack, onEnterGame }) => {
   const [currentUser, setCurrentUser] = useState(auth.currentUser);
   const [isCreating, setIsCreating] = useState(false);
   const [newRoomName, setNewRoomName] = useState('');
+  const [showRules, setShowRules] = useState(false); // Rules Modal State
 
   // Subscribe to Auth State
   useEffect(() => {
@@ -67,7 +69,9 @@ export const Lobby: React.FC<LobbyProps> = ({ onBack, onEnterGame }) => {
   const selectedRoomData = rooms.find(r => r.id === selectedRoom);
 
   return (
-    <div className="flex flex-col h-full w-full max-w-7xl mx-auto p-4 md:p-8">
+    <div className="flex flex-col h-full w-full max-w-7xl mx-auto p-4 md:p-8 relative">
+      <GameRulesModal isOpen={showRules} onClose={() => setShowRules(false)} />
+
       {/* Header */}
       <div className="flex items-center justify-between mb-8 border-b border-gold-800/30 pb-4">
         <div className="flex items-center gap-4">
@@ -77,15 +81,21 @@ export const Lobby: React.FC<LobbyProps> = ({ onBack, onEnterGame }) => {
           <h2 className="text-3xl font-serif text-gold-400 tracking-wider italic">GAME LOBBY</h2>
         </div>
         
-        {currentUser && (
-            <div className="flex items-center gap-4 bg-luxury-panel px-6 py-2 rounded-sm border border-gold-800/50 shadow-lg">
-            <User size={18} className="text-gold-500" />
-            <span className="text-base text-white font-bold">{currentUser.displayName || 'Guest'}</span>
-            <span className={`text-xs px-2 py-0.5 rounded ${isAnonymous ? 'bg-gray-700 text-gray-300' : 'bg-blue-900 text-blue-300'}`}>
-                {isAnonymous ? 'GUEST' : 'HOST'}
-            </span>
-            </div>
-        )}
+        <div className="flex items-center gap-3">
+             <Button variant="outline" size="sm" onClick={() => setShowRules(true)} icon={<BookOpen size={16}/>}>
+                 게임 가이드
+             </Button>
+
+            {currentUser && (
+                <div className="hidden md:flex items-center gap-4 bg-luxury-panel px-6 py-2 rounded-sm border border-gold-800/50 shadow-lg">
+                <User size={18} className="text-gold-500" />
+                <span className="text-base text-white font-bold">{currentUser.displayName || 'Guest'}</span>
+                <span className={`text-xs px-2 py-0.5 rounded ${isAnonymous ? 'bg-gray-700 text-gray-300' : 'bg-blue-900 text-blue-300'}`}>
+                    {isAnonymous ? 'GUEST' : 'HOST'}
+                </span>
+                </div>
+            )}
+        </div>
       </div>
 
       {/* Main Content Area */}
