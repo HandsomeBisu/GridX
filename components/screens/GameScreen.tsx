@@ -228,19 +228,9 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
       // Check if animation needed
       if (playersToAnimate.length > 0 && !isAnimating) {
           animateMultiplePlayers(playersToAnimate);
-      } else if (playersToAnimate.length === 0 && !isAnimating && roomData.players[currentUser!.uid]?.isTurn) {
-         const myRealPos = roomData.players[currentUser!.uid].position;
-         const myVisualPos = visualPositions[currentUser!.uid];
-         const myIslandTurns = roomData.players[currentUser!.uid].islandTurns;
-         
-         if (myVisualPos === myRealPos && !modalState.isOpen && myRealPos !== 10 && myIslandTurns === 0) { 
-             // Logic when turn starts and we are idle
-             if (roomData.lastAction?.type === 'START_TURN') {
-                handleArrival(myRealPos);
-             }
-         }
-      }
-
+      } 
+      // Removed incorrect START_TURN arrival triggering logic to fix bug where next player gets stuck at Start
+      
   }, [roomData, currentUser]); 
 
   const animateMultiplePlayers = async (moves: { uid: string, start: number, end: number }[]) => {
