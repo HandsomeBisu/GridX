@@ -1,7 +1,8 @@
 import { db } from '../firebaseConfig';
 import { collection, doc, setDoc, updateDoc, onSnapshot, getDoc, runTransaction, deleteDoc } from 'firebase/firestore';
-import { GameRoom, Player, BuildingState, LandOwnership } from '../types';
+import { GameRoom, Player, BuildingState, LandOwnership, GameAction } from '../types';
 import { BOARD_DATA } from '../data/boardData';
+import { GOLDEN_KEYS } from '../data/goldenKeyData';
 
 const ROOMS_COLLECTION = 'rooms';
 
@@ -51,7 +52,8 @@ export const GameService = {
       playerOrder: [hostUser.uid],
       ownership: {},
       currentTurnIndex: 0,
-      createdAt: Date.now()
+      createdAt: Date.now(),
+      welfareFund: 0,
     };
 
     await setDoc(roomRef, newRoom);
@@ -160,17 +162,111 @@ export const GameService = {
       let newPosition = (player.position + totalSteps) % 40;
       
       let newBalance = player.balance;
-      // Pass Start Bonus (Salary)
+      let salaryMsg = '';
+      
       if (newPosition < player.position) {
           newBalance += 300000; // Salary
+          salaryMsg = ' (월급 수령)';
       }
+
+      const action: GameAction = {
+          type: 'MOVE',
+          message: `주사위 ${d1}+${d2}=${totalSteps} 이동${salaryMsg}`,
+          subjectId: playerId,
+          timestamp: Date.now()
+      };
 
       transaction.update(roomRef, {
         [`players.${playerId}.position`]: newPosition,
         [`players.${playerId}.balance`]: newBalance,
-        lastDiceValues: [d1, d2]
+        lastDiceValues: [d1, d2],
+        lastAction: action
       });
     });
+  },
+
+  // Space Travel Teleport
+  teleportPlayer: async (roomId: string, playerId: string, targetPos: number) => {
+      const roomRef = doc(db, ROOMS_COLLECTION, roomId);
+      await runTransaction(db, async (transaction) => {
+          const roomDoc = await transaction.get(roomRef);
+          if (!roomDoc.exists()) throw "Room not found";
+          const roomData = roomDoc.data() as GameRoom;
+          const player = roomData.players[playerId];
+          
+          if (!player.isTurn) throw "Not your turn";
+          
+          // Note: Typically Space Travel is a direct teleport, no salary.
+          
+          const action: GameAction = {
+              type: 'TELEPORT',
+              message: `우주여행으로 이동`,
+              subjectId: playerId,
+              timestamp: Date.now()
+          };
+
+          transaction.update(roomRef, {
+              [`players.${playerId}.position`]: targetPos,
+              lastAction: action
+          });
+      });
+  },
+
+  // Pay into Welfare Fund
+  payWelfareFund: async (roomId: string, playerId: string, amount: number) => {
+      const roomRef = doc(db, ROOMS_COLLECTION, roomId);
+      await runTransaction(db, async (transaction) => {
+          const roomDoc = await transaction.get(roomRef);
+          if (!roomDoc.exists()) throw "Room";
+          const roomData = roomDoc.data() as GameRoom;
+          
+          const player = roomData.players[playerId];
+          
+          const action: GameAction = {
+              type: 'WELFARE',
+              message: '사회복지기금 납부',
+              subjectId: playerId,
+              amount: amount,
+              timestamp: Date.now()
+          };
+
+          transaction.update(roomRef, {
+              [`players.${playerId}.balance`]: player.balance - amount,
+              welfareFund: (roomData.welfareFund || 0) + amount,
+              lastAction: action
+          });
+      });
+  },
+
+  // Receive Welfare Fund
+  receiveWelfareFund: async (roomId: string, playerId: string) => {
+      const roomRef = doc(db, ROOMS_COLLECTION, roomId);
+      return await runTransaction(db, async (transaction) => {
+          const roomDoc = await transaction.get(roomRef);
+          if (!roomDoc.exists()) throw "Room";
+          const roomData = roomDoc.data() as GameRoom;
+          
+          const fund = roomData.welfareFund || 0;
+          if (fund === 0) return 0; // Nothing to receive
+          
+          const player = roomData.players[playerId];
+
+          const action: GameAction = {
+              type: 'WELFARE',
+              message: '사회복지기금 수령',
+              subjectId: playerId,
+              amount: fund,
+              timestamp: Date.now()
+          };
+
+          transaction.update(roomRef, {
+              [`players.${playerId}.balance`]: player.balance + fund,
+              welfareFund: 0,
+              lastAction: action
+          });
+          
+          return fund;
+      });
   },
 
   purchaseLand: async (roomId: string, playerId: string, cellId: number, cost: number, buildings: BuildingState) => {
@@ -179,9 +275,8 @@ export const GameService = {
     await runTransaction(db, async (transaction) => {
         const roomDoc = await transaction.get(roomRef);
         if (!roomDoc.exists()) throw "Room not found";
-        const roomData = roomDoc.data() as GameRoom;
         
-        const player = roomData.players[playerId];
+        const player = roomDoc.data().players[playerId];
         if (player.balance < cost) throw "Insufficient funds";
 
         // Calculate simplified toll
@@ -192,7 +287,6 @@ export const GameService = {
             if (cellData.type === 'SPECIAL' || cellData.type === 'VEHICLE') {
                 newToll = cellData.toll || 0;
             } else if (cellData.price) {
-                // Land Type
                 const basePrice = cellData.price;
                 newToll = basePrice * RATIOS.LAND_TOLL;
                 if (buildings.hasVilla) newToll += basePrice * RATIOS.VILLA_TOLL;
@@ -207,15 +301,65 @@ export const GameService = {
             currentToll: Math.floor(newToll)
         };
 
+        const action: GameAction = {
+            type: 'BUY',
+            message: `${cellData?.name} 매입/건설`,
+            subjectId: playerId,
+            amount: cost,
+            timestamp: Date.now()
+        };
+
         transaction.update(roomRef, {
             [`ownership.${cellId}`]: ownershipData,
             [`players.${playerId}.balance`]: player.balance - cost,
-            [`players.${playerId}.assets`]: player.assets + 1
+            [`players.${playerId}.assets`]: player.assets + 1,
+            lastAction: action
         });
     });
   },
 
-  // Pay Toll to another player
+  sellLand: async (roomId: string, playerId: string, cellId: number) => {
+     const roomRef = doc(db, ROOMS_COLLECTION, roomId);
+     await runTransaction(db, async (transaction) => {
+         const roomDoc = await transaction.get(roomRef);
+         if (!roomDoc.exists()) throw "Room";
+         const roomData = roomDoc.data() as GameRoom;
+         
+         const ownership = roomData.ownership[cellId];
+         if (!ownership || ownership.ownerId !== playerId) throw "Not owner";
+
+         // Sell price = 50% of base price + buildings
+         const cellData = BOARD_DATA.find(c => c.id === cellId);
+         if (!cellData || !cellData.price) return;
+
+         let val = cellData.price;
+         if (ownership.buildings.hasVilla) val += cellData.price * RATIOS.VILLA_COST;
+         if (ownership.buildings.hasBuilding) val += cellData.price * RATIOS.BUILD_COST;
+         if (ownership.buildings.hasHotel) val += cellData.price * RATIOS.HOTEL_COST;
+         
+         const sellAmount = Math.floor(val * 0.5);
+
+         // Remove ownership entry
+         const newOwnership = { ...roomData.ownership };
+         delete newOwnership[cellId];
+
+         const action: GameAction = {
+             type: 'SELL',
+             message: `${cellData.name} 매각`,
+             subjectId: playerId,
+             amount: sellAmount,
+             timestamp: Date.now()
+         };
+
+         transaction.update(roomRef, {
+             ownership: newOwnership,
+             [`players.${playerId}.balance`]: roomData.players[playerId].balance + sellAmount,
+             [`players.${playerId}.assets`]: roomData.players[playerId].assets - 1,
+             lastAction: action
+         });
+     });
+  },
+
   payToll: async (roomId: string, payerId: string, ownerId: string, amount: number) => {
     const roomRef = doc(db, ROOMS_COLLECTION, roomId);
 
@@ -226,24 +370,63 @@ export const GameService = {
 
         const payer = roomData.players[payerId];
         const owner = roomData.players[ownerId];
+        
+        if (payer.balance < amount) throw "INSUFFICIENT_FUNDS"; // Force user to sell
 
-        // Simplification: Allow negative balance (Debt) instead of complex bankruptcy flow for now
-        // Or clamp at 0 and set bankrupt
-        let finalAmount = amount;
-        let isBankrupt = false;
-
-        if (payer.balance < amount) {
-            // Pay what you can
-            finalAmount = payer.balance > 0 ? payer.balance : 0; 
-            isBankrupt = true;
-        }
+        const action: GameAction = {
+            type: 'PAY_TOLL',
+            message: `통행료 지불`,
+            subjectId: payerId,
+            targetId: ownerId,
+            amount: amount,
+            timestamp: Date.now()
+        };
 
         transaction.update(roomRef, {
-            [`players.${payerId}.balance`]: payer.balance - finalAmount,
-            [`players.${payerId}.isBankrupt`]: isBankrupt,
-            [`players.${ownerId}.balance`]: owner.balance + finalAmount
+            [`players.${payerId}.balance`]: payer.balance - amount,
+            [`players.${ownerId}.balance`]: owner.balance + amount,
+            lastAction: action
         });
     });
+  },
+
+  applyGoldenKey: async (roomId: string, playerId: string) => {
+      const roomRef = doc(db, ROOMS_COLLECTION, roomId);
+      // Random Key
+      const key = GOLDEN_KEYS[Math.floor(Math.random() * GOLDEN_KEYS.length)];
+
+      await runTransaction(db, async (transaction) => {
+          const roomDoc = await transaction.get(roomRef);
+          if (!roomDoc.exists()) throw "Room";
+          const player = roomDoc.data().players[playerId];
+
+          const result = key.effect(player.position, player.balance);
+          
+          let updateData: any = {};
+          
+          if (result.newPos !== undefined) {
+              updateData[`players.${playerId}.position`] = result.newPos;
+              // Check pass start logic if moving forward
+              if (result.newPos < player.position && key.type === 'MOVE' && result.newPos !== 20) { 
+                 // Simple check for wrapping around (except move to island/prison)
+                 // NOTE: This is simplified.
+              }
+          }
+          if (result.balanceChange !== undefined) {
+              updateData[`players.${playerId}.balance`] = player.balance + result.balanceChange;
+          }
+
+          const action: GameAction = {
+              type: 'GOLD_KEY',
+              message: `황금열쇠: ${key.title} (${result.message})`,
+              subjectId: playerId,
+              timestamp: Date.now()
+          };
+
+          updateData.lastAction = action;
+          transaction.update(roomRef, updateData);
+      });
+      return key;
   },
 
   endTurn: async (roomId: string) => {
@@ -256,7 +439,6 @@ export const GameService = {
 
           let nextIdx = (roomData.currentTurnIndex + 1) % roomData.playerOrder.length;
           
-          // Skip bankrupt players
           let loops = 0;
           while (roomData.players[roomData.playerOrder[nextIdx]].isBankrupt && loops < roomData.playerOrder.length) {
               nextIdx = (nextIdx + 1) % roomData.playerOrder.length;
@@ -270,6 +452,12 @@ export const GameService = {
               currentTurnIndex: nextIdx,
               [`players.${currentPlayerId}.isTurn`]: false,
               [`players.${nextPlayerId}.isTurn`]: true,
+              lastAction: {
+                  type: 'START_TURN',
+                  message: '턴 종료',
+                  subjectId: nextPlayerId,
+                  timestamp: Date.now()
+              }
           });
       });
   },

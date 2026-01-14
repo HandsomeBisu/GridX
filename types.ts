@@ -46,6 +46,28 @@ export interface LandOwnership {
   currentToll: number;
 }
 
+// New: For Event Logs
+export interface GameAction {
+  type: 'MOVE' | 'BUY' | 'PAY_TOLL' | 'SELL' | 'GOLD_KEY' | 'START_TURN' | 'WELFARE' | 'TELEPORT';
+  message: string;
+  subjectId: string; // Player who did action
+  targetId?: string; // Player who received money (optional)
+  amount?: number;
+  timestamp: number;
+}
+
+export interface GoldenKey {
+  id: number;
+  title: string;
+  description: string;
+  type: 'MOVE' | 'MONEY' | 'SPECIAL';
+  effect: (playerPos: number, currentBalance: number) => { 
+      newPos?: number; 
+      balanceChange?: number; 
+      message: string;
+  };
+}
+
 export interface GameRoom {
   id: string;
   name: string;
@@ -58,5 +80,7 @@ export interface GameRoom {
   ownership: Record<string, LandOwnership>; // Map of Cell ID (string) -> Ownership
   currentTurnIndex: number; // Index in playerOrder
   lastDiceValues?: [number, number]; // Sync dice result
+  lastAction?: GameAction; // Last event for UI logs
+  welfareFund: number; // Accumulated Welfare Fund
   createdAt: number;
 }
