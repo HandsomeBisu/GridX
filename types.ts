@@ -1,3 +1,4 @@
+
 // Enum for managing the high-level application screen state
 export enum AppScreen {
   MAIN_MENU = 'MAIN_MENU',
@@ -69,6 +70,16 @@ export interface GoldenKey {
   };
 }
 
+// NEW: Chat Message Interface
+export interface ChatMessage {
+  id: string;
+  senderId: string; // 'SYSTEM' if system message
+  senderName: string;
+  text: string;
+  type: 'USER' | 'SYSTEM';
+  timestamp: number;
+}
+
 export interface GameRoom {
   id: string;
   name: string;
@@ -82,6 +93,7 @@ export interface GameRoom {
   currentTurnIndex: number; // Index in playerOrder
   lastDiceValues?: [number, number]; // Sync dice result
   lastAction?: GameAction; // Last event for UI logs
+  chat: ChatMessage[]; // NEW: Chat History
   welfareFund: number; // Accumulated Welfare Fund
   turnDeadline?: number; // Timestamp for when the current turn must end
   createdAt: number;
