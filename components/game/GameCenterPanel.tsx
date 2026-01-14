@@ -72,7 +72,7 @@ export const GameCenterPanel: React.FC<GameCenterPanelProps> = ({
         
         <div className="relative z-10 text-center w-full flex flex-col items-center">
             
-            {/* Game Status Text */}
+            {/* GameStatus Text */}
             <div className="mb-2 h-10 flex items-center justify-center w-full px-4">
                 {isWaiting ? (
                     <div className="flex flex-col items-center gap-2">
@@ -141,7 +141,7 @@ export const GameCenterPanel: React.FC<GameCenterPanelProps> = ({
                         disabled={isAnimating || !isMyTurn}
                         className="w-full py-3 bg-gradient-to-r from-gray-700 to-gray-600 text-white font-bold rounded shadow border border-gray-500 hover:brightness-110 disabled:opacity-50"
                     >
-                        주사위 굴리기 (더블 도전)
+                        주사위 굴리기 (턴 차감)
                     </button>
                     <button 
                         onClick={onEscapeIsland}

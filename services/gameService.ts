@@ -230,48 +230,29 @@ export const GameService = {
       const d1 = Math.floor(Math.random() * 6) + 1;
       const d2 = Math.floor(Math.random() * 6) + 1;
       const totalSteps = d1 + d2;
-      const isDouble = d1 === d2;
+      
+      // Removed isDouble logic as requested (No extra turn, no island double escape)
 
-      // Reset deadline on roll to give time to act, or pause it?
-      // Usually monopoly pauses timer during decision.
-      // We will set it to very far future or null during interaction, then reset on endTurn.
-      // For simplicity, let's extend it by 60s for decision making.
+      // Reset deadline on roll to give time to act
       const decisionTime = Date.now() + 60000; 
 
       // Island Logic
       if (player.islandTurns > 0) {
-          if (isDouble) {
-               const action: GameAction = {
-                  type: 'ESCAPE_SUCCESS',
-                  message: `더블! 무인도 탈출 성공 (${d1},${d2})`,
-                  subjectId: playerId,
-                  timestamp: Date.now()
-              };
-              
-              let newPosition = (player.position + totalSteps) % 40;
-              transaction.update(roomRef, {
-                  [`players.${playerId}.islandTurns`]: 0,
-                  [`players.${playerId}.position`]: newPosition,
-                  lastDiceValues: [d1, d2],
-                  lastAction: action,
-                  turnDeadline: decisionTime
-              });
-          } else {
-              const nextTurns = player.islandTurns - 1;
-              const action: GameAction = {
-                  type: 'ESCAPE_FAIL',
-                  message: nextTurns > 0 ? `탈출 실패.. 남은 턴: ${nextTurns}` : `무인도 형기 종료. 다음 턴에 이동.`,
-                  subjectId: playerId,
-                  timestamp: Date.now()
-              };
+          // Player stays on island, just decrements count
+          const nextTurns = player.islandTurns - 1;
+          const action: GameAction = {
+              type: 'ESCAPE_FAIL',
+              message: nextTurns > 0 ? `무인도 체류 중.. 남은 턴: ${nextTurns}` : `무인도 형기 종료. 다음 턴에 이동.`,
+              subjectId: playerId,
+              timestamp: Date.now()
+          };
 
-              transaction.update(roomRef, {
-                  [`players.${playerId}.islandTurns`]: nextTurns,
-                  lastDiceValues: [d1, d2],
-                  lastAction: action,
-                  turnDeadline: decisionTime // Still need to end turn manually
-              });
-          }
+          transaction.update(roomRef, {
+              [`players.${playerId}.islandTurns`]: nextTurns,
+              lastDiceValues: [d1, d2],
+              lastAction: action,
+              turnDeadline: decisionTime
+          });
           return;
       }
 

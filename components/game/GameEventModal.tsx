@@ -79,7 +79,6 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
 
   // --- RENDERERS ---
 
-  // ... (Keep existing simpler renderers for events)
   const renderWelfarePayContent = () => (
       <div className="text-center py-6 space-y-4">
           <div className="w-24 h-24 mx-auto bg-red-900/20 rounded-full flex items-center justify-center border border-red-500/50">
@@ -191,17 +190,17 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
       );
   };
 
-  // NEW: Card Style Buy Land Content
+  // Reverted to Simple Buy Land Content
   const renderBuyLandContent = () => {
     if (!cellData) return null;
     const isSpecialLocation = cellData.type === 'SPECIAL' || cellData.type === 'VEHICLE';
     const basePrice = cellData.price || 0;
-    const fixedToll = cellData.toll || 0;
     
     let cost = 0;
     if (selection.hasVilla && !currentBuildings.hasVilla) cost += basePrice * RATIOS.VILLA_COST;
     if (selection.hasBuilding && !currentBuildings.hasBuilding) cost += basePrice * RATIOS.BUILD_COST;
     if (selection.hasHotel && !currentBuildings.hasHotel) cost += basePrice * RATIOS.HOTEL_COST;
+    
     const isOwned = cellData.owner !== null && cellData.owner !== undefined;
     const landPriceToPay = isOwned ? 0 : basePrice;
     const totalCost = landPriceToPay + cost;
@@ -213,87 +212,66 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
     };
 
     return (
-        <div className="space-y-4">
-            {/* DEED CARD UI */}
-            <div className="bg-[#f0f0f0] rounded-lg overflow-hidden text-black shadow-lg mx-auto w-full max-w-xs transform transition-transform hover:scale-[1.02]">
-                {/* Card Header (Color Strip) */}
-                <div className="h-12 flex items-center justify-center relative" style={{ backgroundColor: cellData.color || '#333' }}>
-                     <div className="absolute top-1 left-1/2 -translate-x-1/2 text-[8px] text-white/80 uppercase tracking-widest font-sans font-bold">Land Title Deed</div>
-                     <h3 className="text-xl font-black text-white uppercase tracking-tight text-shadow-sm mt-1">{cellData.name}</h3>
-                </div>
-                
-                {/* Card Body */}
-                <div className="p-4 space-y-3">
-                     {isSpecialLocation ? (
-                         <div className="text-center space-y-2 py-4">
-                             <p className="text-xs text-gray-500 uppercase tracking-wide">Fixed Rental Price</p>
-                             <p className="text-2xl font-black text-gray-800">₩ {formatMoney(fixedToll).replace('₩ ','')}</p>
-                         </div>
-                     ) : (
-                         <div className="space-y-1 text-xs font-mono text-gray-600">
-                             <div className="flex justify-between border-b border-gray-300 pb-1">
-                                 <span>기본 통행료</span>
-                                 <span className="font-bold">₩ {formatMoney(basePrice * RATIOS.LAND_TOLL).replace('₩ ','')}</span>
-                             </div>
-                             <div className="flex justify-between items-center py-0.5">
-                                 <span className="flex items-center gap-1"><Home size={10}/> 별장 통행료</span>
-                                 <span className="font-bold">₩ {formatMoney(basePrice * (RATIOS.LAND_TOLL + RATIOS.VILLA_TOLL)).replace('₩ ','')}</span>
-                             </div>
-                             <div className="flex justify-between items-center py-0.5">
-                                 <span className="flex items-center gap-1"><Building size={10}/> 빌딩 통행료</span>
-                                 <span className="font-bold">₩ {formatMoney(basePrice * (RATIOS.LAND_TOLL + RATIOS.BUILD_TOLL)).replace('₩ ','')}</span>
-                             </div>
-                             <div className="flex justify-between items-center py-0.5">
-                                 <span className="flex items-center gap-1"><Hotel size={10}/> 호텔 통행료</span>
-                                 <span className="font-bold">₩ {formatMoney(basePrice * (RATIOS.LAND_TOLL + RATIOS.HOTEL_TOLL)).replace('₩ ','')}</span>
-                             </div>
-                         </div>
-                     )}
-                     
-                     <div className="pt-2 border-t-2 border-dashed border-gray-300">
-                         <div className="flex justify-between text-xs font-bold text-gray-500 uppercase">
-                            <span>Mortgage Value</span>
-                            <span>{formatMoney(basePrice * 0.5)}</span>
-                         </div>
-                     </div>
-                </div>
-            </div>
+        <div className="space-y-6">
+            <p className="text-gray-400 text-center text-sm">
+                {isOwned ? "추가 건설을 진행합니다." : "이 지역을 매입하고 건물을 건설하세요."}
+            </p>
 
-            {/* Construction Selection (Overlaid below card) */}
-            {!isSpecialLocation && (
-                <div className="grid grid-cols-3 gap-2">
-                    {[
-                        { key: 'hasVilla', label: '별장', icon: <Home size={14}/>, cost: RATIOS.VILLA_COST },
-                        { key: 'hasBuilding', label: '빌딩', icon: <Building size={14}/>, cost: RATIOS.BUILD_COST },
-                        { key: 'hasHotel', label: '호텔', icon: <Hotel size={14}/>, cost: RATIOS.HOTEL_COST },
-                    ].map((item) => (
-                         <button 
-                            key={item.key}
-                            onClick={() => !currentBuildings[item.key as keyof BuildingState] && toggleBuilding(item.key as keyof BuildingState)}
-                            disabled={currentBuildings[item.key as keyof BuildingState]}
-                            className={`flex flex-col items-center justify-center p-2 rounded border-2 transition-all
-                            ${currentBuildings[item.key as keyof BuildingState] ? 'bg-gray-800 border-gray-700 text-gray-500 opacity-50 cursor-default' : 
-                              selection[item.key as keyof BuildingState] ? 'bg-gold-500/20 border-gold-500 text-gold-400' : 'bg-black/40 border-gray-700 text-gray-400 hover:bg-gray-800'}`}
-                         >
-                             {item.icon}
-                             <span className="text-[10px] mt-1">{item.label}</span>
-                             <span className="text-[10px] font-mono">{formatMoney(basePrice * item.cost).replace('₩ ','')}</span>
-                             {(selection[item.key as keyof BuildingState] || currentBuildings[item.key as keyof BuildingState]) && <div className="absolute top-1 right-1"><Check size={8} className="text-green-500"/></div>}
-                         </button>
-                    ))}
+            {/* Base Land Info (Only if not owned yet) */}
+            {!isOwned && (
+                <div className="flex justify-between items-center bg-white/5 p-3 rounded border border-gold-500/30">
+                    <span className="font-bold text-gray-200">🚩 토지 매입</span>
+                    <span className="font-mono text-gold-400">₩ {formatMoney(basePrice).replace('₩ ', '')}</span>
                 </div>
             )}
-            
-            {/* Summary & Action */}
-            <div className="bg-black/60 p-3 rounded border border-gold-900/50 flex justify-between items-center">
-                 <div className="flex flex-col">
-                     <span className="text-xs text-gray-400">TOTAL COST</span>
-                     <span className={`text-lg font-black font-mono ${canAfford ? 'text-gold-400' : 'text-red-500'}`}>{formatMoney(totalCost)}</span>
+
+            {/* Buildings Selection */}
+            {!isSpecialLocation && (
+                <div className="grid grid-cols-3 gap-3">
+                    {[
+                        { key: 'hasVilla', label: '별장', icon: <Home size={16}/>, cost: basePrice * RATIOS.VILLA_COST },
+                        { key: 'hasBuilding', label: '빌딩', icon: <Building size={16}/>, cost: basePrice * RATIOS.BUILD_COST },
+                        { key: 'hasHotel', label: '호텔', icon: <Hotel size={16}/>, cost: basePrice * RATIOS.HOTEL_COST },
+                    ].map((item) => {
+                         const isBuilt = currentBuildings[item.key as keyof BuildingState];
+                         const isSelected = selection[item.key as keyof BuildingState];
+                         
+                         return (
+                             <button 
+                                key={item.key}
+                                onClick={() => !isBuilt && toggleBuilding(item.key as keyof BuildingState)}
+                                disabled={isBuilt}
+                                className={`flex flex-col items-center justify-center p-3 rounded border transition-all relative overflow-hidden
+                                ${isBuilt 
+                                    ? 'bg-gray-800 border-gray-700 text-gray-600 cursor-not-allowed opacity-50' 
+                                    : isSelected
+                                        ? 'bg-gold-600 border-gold-400 text-white shadow-[0_0_15px_rgba(245,132,26,0.4)]'
+                                        : 'bg-black/40 border-gray-700 text-gray-400 hover:border-gold-500/50 hover:bg-gold-900/10'
+                                }`}
+                             >
+                                 {item.icon}
+                                 <span className="text-xs font-bold mt-2 mb-1">{item.label}</span>
+                                 <span className="text-[10px] font-mono opacity-80">{formatMoney(item.cost).replace('₩ ', '')}</span>
+                                 {isBuilt && <div className="absolute top-1 right-1 text-green-500"><Check size={12}/></div>}
+                                 {isSelected && !isBuilt && <div className="absolute top-1 right-1 text-white"><Check size={12}/></div>}
+                             </button>
+                         );
+                    })}
+                </div>
+            )}
+
+            {/* Total Cost & Action */}
+             <div className="bg-black/60 p-4 rounded border border-gold-900/50 flex flex-col gap-4">
+                 <div className="flex justify-between items-end border-b border-gray-800 pb-3">
+                     <span className="text-sm text-gray-400">총 소요 비용</span>
+                     <span className={`text-2xl font-black font-mono ${canAfford ? 'text-gold-400' : 'text-red-500'}`}>
+                         {formatMoney(totalCost)}
+                     </span>
                  </div>
-                 <div className="flex gap-2">
-                     <Button variant="secondary" size="sm" onClick={onCancel}>PASS</Button>
-                     <Button variant="primary" size="sm" disabled={!canAfford || (isSpecialLocation && isOwned)} onClick={() => onConfirm(selection, totalCost)}>
-                         {isOwned ? '건설' : '매입'}
+                 <div className="flex gap-3">
+                     <Button variant="secondary" className="flex-1" onClick={onCancel}>건너뛰기</Button>
+                     <Button variant="primary" className="flex-[2]" disabled={!canAfford || (totalCost === 0 && isOwned)} onClick={() => onConfirm(selection, totalCost)}>
+                         {isOwned ? '건설하기' : '매입하기'}
                      </Button>
                  </div>
             </div>
@@ -358,9 +336,8 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
     <div className="absolute inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fade-in-up">
       <div className="relative w-full max-w-lg bg-luxury-panel border border-gold-600 rounded-lg shadow-[0_0_60px_rgba(245,132,26,0.3)] overflow-hidden flex flex-col max-h-[90vh]">
         
-        {/* Header - Conditional Rendering for Cards */}
-        {type !== 'BUY_LAND' && (
-            <div className="h-24 relative overflow-hidden bg-black shrink-0">
+        {/* Header - Always show for context, including BUY_LAND now */}
+        <div className="h-24 relative overflow-hidden bg-black shrink-0">
             {(cellData?.image || cellData?.countryCode) ? (
                 <>
                 <img 
@@ -392,11 +369,11 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
                     type === 'SPACE_TRAVEL' ? 'TELEPORT GATE' :
                     type === 'WELFARE_PAY' ? 'DONATION' :
                     type === 'WELFARE_RECEIVE' ? 'JACKPOT' :
-                    (type === 'SELL_LAND' ? 'ASSET LIQUIDATION' : 'EVENT')}
+                    (type === 'SELL_LAND' ? 'ASSET LIQUIDATION' : 
+                    type === 'BUY_LAND' ? 'PURCHASE & UPGRADE' : 'EVENT')}
                 </p>
             </div>
-            </div>
-        )}
+        </div>
 
         {/* Content Body */}
         <div className="p-5 overflow-y-auto">
