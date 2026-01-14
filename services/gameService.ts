@@ -432,7 +432,8 @@ export const GameService = {
          if (ownership.buildings.hasBuilding) val += cellData.price * RATIOS.BUILD_COST;
          if (ownership.buildings.hasHotel) val += cellData.price * RATIOS.HOTEL_COST;
          
-         const sellAmount = Math.floor(val * 0.5);
+         // CHANGED: 100% Refund
+         const sellAmount = Math.floor(val * 1.0);
 
          const newOwnership = { ...roomData.ownership };
          delete newOwnership[cellId];

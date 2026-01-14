@@ -11,6 +11,8 @@ interface GameCenterPanelProps {
   isSpaceTravelMode: boolean;
   isStuckOnIsland: boolean;
   isAnimating: boolean;
+  isProcessing?: boolean;
+  isModalOpen?: boolean; // New prop to pause timer
   diceRolling: boolean;
   shownDiceValues: [number, number] | null;
   onRollDice: () => void;
@@ -26,6 +28,8 @@ export const GameCenterPanel: React.FC<GameCenterPanelProps> = ({
   isSpaceTravelMode,
   isStuckOnIsland,
   isAnimating,
+  isProcessing = false,
+  isModalOpen = false,
   diceRolling,
   shownDiceValues,
   onRollDice,
@@ -44,6 +48,9 @@ export const GameCenterPanel: React.FC<GameCenterPanelProps> = ({
     if (isWaiting || roomData.status === 'FINISHED') return;
     
     const interval = setInterval(() => {
+        // Pausing timer visually if modal is open to indicate "Thinking Time"
+        if (isModalOpen) return;
+
         if (!roomData.turnDeadline) {
             setPercent(100);
             setTimeLeft(30);
@@ -52,10 +59,7 @@ export const GameCenterPanel: React.FC<GameCenterPanelProps> = ({
         
         const now = Date.now();
         const remaining = Math.max(0, roomData.turnDeadline - now);
-        const totalDuration = 30000; // 30s as base, though server sets deadline. 
-        // We calculate percent based on remaining vs assume standard 30s or just raw remaining
         
-        // Actually, logic: if turn changed, deadline updated.
         const p = Math.min(100, (remaining / 30000) * 100);
         
         setTimeLeft(Math.ceil(remaining / 1000));
@@ -63,8 +67,9 @@ export const GameCenterPanel: React.FC<GameCenterPanelProps> = ({
     }, 100);
 
     return () => clearInterval(interval);
-  }, [roomData.turnDeadline, isWaiting, roomData.status]);
+  }, [roomData.turnDeadline, isWaiting, roomData.status, isModalOpen]);
 
+  const canInteract = isMyTurn && !isAnimating && !diceRolling && !isProcessing;
 
   return (
     <div className="absolute inset-[9.09%] bg-[#111] z-20 flex flex-col items-center justify-center overflow-hidden border border-gold-900/30">
@@ -86,7 +91,9 @@ export const GameCenterPanel: React.FC<GameCenterPanelProps> = ({
                 ) : (
                     <div className="flex flex-col items-center w-full gap-1">
                          <div className="flex items-center gap-2">
-                            {isSpaceTravelMode ? (
+                            {isProcessing ? (
+                                <span className="text-gold-500 font-bold text-sm animate-pulse">EVENT PROCESSING...</span>
+                            ) : isSpaceTravelMode ? (
                                 <span className="text-purple-400 font-bold text-sm animate-pulse">우주여행: 원하는 지역을 선택하세요</span>
                             ) : isStuckOnIsland ? (
                                 <span className="text-red-400 font-bold text-sm animate-pulse flex items-center gap-2"><Lock size={14}/> 무인도에 갇혔습니다 ({myPlayer?.islandTurns}턴 남음)</span>
@@ -98,7 +105,7 @@ export const GameCenterPanel: React.FC<GameCenterPanelProps> = ({
                             )}
                         </div>
                         {/* Timer Bar */}
-                        {!isAnimating && !diceRolling && roomData.status === 'PLAYING' && (
+                        {canInteract && roomData.status === 'PLAYING' && (
                              <div className="w-48 h-1.5 bg-gray-800 rounded-full overflow-hidden relative mt-1">
                                  <div 
                                     className={`absolute left-0 top-0 bottom-0 transition-all duration-200 ${timeLeft < 10 ? 'bg-red-500' : 'bg-gold-500'}`} 
@@ -107,7 +114,7 @@ export const GameCenterPanel: React.FC<GameCenterPanelProps> = ({
                                  {timeLeft < 10 && <div className="absolute inset-0 bg-red-500/30 animate-pulse"/>}
                              </div>
                         )}
-                        {!isAnimating && !diceRolling && roomData.status === 'PLAYING' && timeLeft <= 10 && (
+                        {canInteract && roomData.status === 'PLAYING' && timeLeft <= 10 && (
                             <span className="text-[10px] text-red-500 font-mono animate-pulse">{timeLeft}s</span>
                         )}
                     </div>
@@ -138,14 +145,14 @@ export const GameCenterPanel: React.FC<GameCenterPanelProps> = ({
                 <>
                     <button 
                         onClick={onRollDice}
-                        disabled={isAnimating || !isMyTurn}
+                        disabled={!canInteract}
                         className="w-full py-3 bg-gradient-to-r from-gray-700 to-gray-600 text-white font-bold rounded shadow border border-gray-500 hover:brightness-110 disabled:opacity-50"
                     >
                         주사위 굴리기 (턴 차감)
                     </button>
                     <button 
                         onClick={onEscapeIsland}
-                        disabled={isAnimating || !isMyTurn || (myPlayer?.balance || 0) < 200000}
+                        disabled={!canInteract || (myPlayer?.balance || 0) < 200000}
                         className="w-full py-2 bg-transparent text-gold-500 text-xs font-bold border border-gold-500 rounded hover:bg-gold-500/10 disabled:opacity-30"
                     >
                         탈출 비용 지불 (20만원)
@@ -154,14 +161,14 @@ export const GameCenterPanel: React.FC<GameCenterPanelProps> = ({
             ) : (
                 <button 
                 onClick={onRollDice}
-                disabled={isAnimating || !isMyTurn || isWaiting}
+                disabled={!canInteract || isWaiting}
                 className={`group relative px-8 py-3 md:px-10 md:py-4 bg-gradient-to-b from-gold-500 to-gold-700 text-black font-black uppercase tracking-wider rounded-lg shadow-[0_0_30px_rgba(245,132,26,0.4)] transition-all 
-                    ${(isAnimating || !isMyTurn || isWaiting) 
+                    ${(!canInteract || isWaiting) 
                         ? 'opacity-30 cursor-not-allowed scale-95 grayscale' 
                         : 'hover:scale-105 hover:shadow-[0_0_50px_rgba(245,132,26,0.6)] active:scale-95'}`}
                 >
                 <span className="flex items-center gap-2 md:gap-3 text-lg md:text-2xl justify-center">
-                    {isAnimating || diceRolling ? <>MOVING...</> : <><Dice5 size={24} className="md:w-8 md:h-8" /> ROLL DICE</>}
+                    {isAnimating || diceRolling || isProcessing ? <>WAITING...</> : <><Dice5 size={24} className="md:w-8 md:h-8" /> ROLL DICE</>}
                 </span>
                 </button>
             )}

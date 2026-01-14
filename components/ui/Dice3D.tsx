@@ -23,14 +23,12 @@ export const Dice3D: React.FC<Dice3DProps> = ({ value, rolling }) => {
     }
   }, [value, rolling]);
 
-  const renderDots = (num: number) => {
-    // Simplified rendering for dots, using flex/grid inside faces would be cleaner but verbose here
-    // For now, we use the number text or simple dots arrangement
-    const dots = [];
-    for(let i=0; i<num; i++) {
-        dots.push(<div key={i} className="dot m-1"></div>);
-    }
-    return <div className="flex flex-wrap justify-center w-8 h-8 content-center">{dots}</div>;
+  const renderFace = (num: number) => {
+    return (
+        <div className="flex items-center justify-center w-full h-full">
+            <span className="text-4xl font-black text-gold-500 drop-shadow-md select-none">{num}</span>
+        </div>
+    );
   };
 
   return (
@@ -43,12 +41,12 @@ export const Dice3D: React.FC<Dice3DProps> = ({ value, rolling }) => {
              : `translateZ(-32px) rotateX(${rotation.x}deg) rotateY(${rotation.y}deg)` 
         }}
       >
-        <div className="cube__face cube__face--1">{renderDots(1)}</div>
-        <div className="cube__face cube__face--2">{renderDots(2)}</div>
-        <div className="cube__face cube__face--3">{renderDots(3)}</div>
-        <div className="cube__face cube__face--4">{renderDots(4)}</div>
-        <div className="cube__face cube__face--5">{renderDots(5)}</div>
-        <div className="cube__face cube__face--6">{renderDots(6)}</div>
+        <div className="cube__face cube__face--1">{renderFace(1)}</div>
+        <div className="cube__face cube__face--2">{renderFace(2)}</div>
+        <div className="cube__face cube__face--3">{renderFace(3)}</div>
+        <div className="cube__face cube__face--4">{renderFace(4)}</div>
+        <div className="cube__face cube__face--5">{renderFace(5)}</div>
+        <div className="cube__face cube__face--6">{renderFace(6)}</div>
       </div>
     </div>
   );

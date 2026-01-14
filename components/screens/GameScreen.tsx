@@ -43,6 +43,7 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
   // Animation State
   const [visualPositions, setVisualPositions] = useState<Record<string, number>>({});
   const [isAnimating, setIsAnimating] = useState<boolean>(false);
+  const [isProcessing, setIsProcessing] = useState<boolean>(false); // NEW: Blocks interactions during async events
   
   // Dice Animation State
   const [diceRolling, setDiceRolling] = useState(false);
@@ -52,10 +53,12 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
   const [floatingTexts, setFloatingTexts] = useState<FloatingTextData[]>([]);
   const [receivedToll, setReceivedToll] = useState<{from: string, amount: number} | null>(null);
   const [showRules, setShowRules] = useState(false); // Rules Modal State
+  const [showTurnEffect, setShowTurnEffect] = useState(false);
   
   // Refs
   const prevPlayersRef = useRef<Record<string, Player>>({});
   const processedActionIdRef = useRef<number>(0);
+  const prevIsMyTurnRef = useRef<boolean>(false);
 
   // Modal State
   const [modalState, setModalState] = useState<{
@@ -104,6 +107,10 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
   // 3. Auto-Pass Turn Logic (Client Side Check)
   useEffect(() => {
       if (!roomData || !currentUser || !roomId) return;
+      
+      // STOP TIMER Logic: If modal is open, don't check for timeout
+      if (modalState.isOpen) return;
+
       const myPlayer = roomData.players[currentUser.uid];
       if (myPlayer?.isTurn && roomData.status === 'PLAYING' && roomData.turnDeadline) {
           const checkTimer = setInterval(() => {
@@ -118,7 +125,7 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
           }, 1000);
           return () => clearInterval(checkTimer);
       }
-  }, [roomData, currentUser, roomId]);
+  }, [roomData, currentUser, roomId, modalState.isOpen]);
 
   // 4. Last Action Processing (Logs, Sounds, Floating Text)
   useEffect(() => {
@@ -163,7 +170,31 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
              const timer = setTimeout(() => { setReceivedToll(null); }, 4000);
          }
          
-         if (action.type === 'ESCAPE_FAIL' && action.subjectId === currentUser.uid) playSound('ERROR');
+         if (action.type === 'ESCAPE_FAIL' && action.subjectId === currentUser.uid) {
+             // Island Stay Logic: Show dice roll, then end turn
+             // We block processing to prevent double clicks
+             setIsProcessing(true);
+             playSound('ERROR');
+             
+             spawnFloatingText(roomData.players[currentUser.uid].position, action.message, '#EF4444');
+
+             // Trigger Dice Animation for feedback
+             setDiceRolling(true);
+             playSound('DICE_ROLL');
+
+             setTimeout(() => {
+                 setDiceRolling(false);
+                 if (roomData.lastDiceValues) {
+                     setShownDiceValues(roomData.lastDiceValues);
+                 }
+                 
+                 setTimeout(() => {
+                     handleEndTurn();
+                     setIsProcessing(false);
+                 }, 1500);
+             }, 1000);
+         }
+
          if (action.type === 'ESCAPE_SUCCESS' && action.subjectId === currentUser.uid) playSound('TURN_START');
          if (action.type === 'TIMEOUT') playSound('ERROR');
      }
@@ -235,6 +266,8 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
 
   const animateMultiplePlayers = async (moves: { uid: string, start: number, end: number }[]) => {
       setIsAnimating(true);
+      // Ensure we clear processing state if we start animating a move
+      setIsProcessing(false); 
       
       // Dice Animation Logic
       const isTeleport = roomData?.lastAction?.type === 'TELEPORT';
@@ -291,6 +324,18 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
   const ownershipMap = roomData?.ownership || {};
   const isSpaceTravelMode = isMyTurn && myPlayer?.position === 10 && !isAnimating && !modalState.isOpen;
   const isStuckOnIsland = isMyTurn && (myPlayer?.islandTurns || 0) > 0;
+
+  // Turn Notification Effect
+  useEffect(() => {
+    if (isMyTurn && !prevIsMyTurnRef.current) {
+      playSound('TURN_START');
+      setShowTurnEffect(true);
+      setTimeout(() => setShowTurnEffect(false), 2000);
+      // Reset processing flag on new turn to be safe
+      setIsProcessing(false);
+    }
+    prevIsMyTurnRef.current = isMyTurn;
+  }, [isMyTurn]);
   
   const myOwnedCells = Object.entries(ownershipMap)
     .filter(([_, data]) => (data as LandOwnership).ownerId === currentUser?.uid)
@@ -336,21 +381,36 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
   };
 
   const handleRollDice = async () => {
-    if (isAnimating || modalState.isOpen || !isMyTurn || !roomId || !currentUser) return;
+    if (isAnimating || isProcessing || modalState.isOpen || !isMyTurn || !roomId || !currentUser) return;
     if (isSpaceTravelMode) return;
+    
+    // Set processing TRUE immediately to block double clicks during network request
+    setIsProcessing(true);
+
     try {
         await GameService.rollDice(roomId, currentUser.uid);
+        // Note: We DO NOT set isProcessing(false) here. 
+        // It will be reset by either animateMultiplePlayers (normal move) or the ESCAPE_FAIL handler (island).
     } catch (e) {
         console.error(e);
+        // Only reset if error occurred preventing any action
+        setIsProcessing(false);
     }
   };
 
   const handleEscapeIsland = async () => {
       if (!roomId || !currentUser) return;
+      setIsProcessing(true);
       try {
           await GameService.escapeIsland(roomId, currentUser.uid);
+          // Don't reset isProcessing here either, let the action listener handle it or UI update
+          // Actually escapeIsland updates state immediately, user is free.
+          // The UI will re-render, button becomes available. 
+          // We can reset here because no animation triggers automatically for simple escape pay.
+          setIsProcessing(false);
       } catch (e: any) {
           alert(e);
+          setIsProcessing(false);
       }
   };
 
@@ -372,13 +432,18 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
 
     // Special Case: Golden Key
     if (cell.type === 'GOLD_KEY' && roomId && currentUser) {
+        setIsProcessing(true); // BLOCK interactions
         try {
-            // Wait slightly for animation to settle
-            setTimeout(async () => {
-                const data = await GameService.applyGoldenKey(roomId, currentUser.uid);
-                setModalState({ isOpen: true, type: 'GOLD_KEY', cellData: cell, goldenKeyData: data });
-            }, 500);
-        } catch (e) { console.error(e); handleEndTurn(); }
+            // Wait slightly for animation to settle visually, but block controls
+            await new Promise(resolve => setTimeout(resolve, 500));
+            const data = await GameService.applyGoldenKey(roomId, currentUser.uid);
+            setIsProcessing(false); // UNBLOCK when modal opens
+            setModalState({ isOpen: true, type: 'GOLD_KEY', cellData: cell, goldenKeyData: data });
+        } catch (e) { 
+            console.error(e); 
+            setIsProcessing(false);
+            handleEndTurn(); 
+        }
         return;
     }
 
@@ -390,10 +455,16 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
 
     // Welfare Receive
     if (cell.id === 38 && roomId && currentUser) {
+        setIsProcessing(true);
         try {
             const receivedAmount = await GameService.receiveWelfareFund(roomId, currentUser.uid);
+            setIsProcessing(false);
             setModalState({ isOpen: true, type: 'WELFARE_RECEIVE', cellData: cell, tollAmount: receivedAmount });
-        } catch (e) { console.error(e); handleEndTurn(); }
+        } catch (e) { 
+            console.error(e); 
+            setIsProcessing(false);
+            handleEndTurn(); 
+        }
         return;
     }
 
@@ -467,12 +538,18 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
     handleEndTurn();
   };
 
-  const handleSellAsset = async (cellId: number) => {
+  const handleSellAssets = async (cellIds: number[]) => {
       if (!roomId || !currentUser) return;
       try {
-          await GameService.sellLand(roomId, currentUser.uid, cellId);
+          // Process multiple sells
+          await Promise.all(cellIds.map(id => GameService.sellLand(roomId, currentUser.uid, id)));
           playSound('BUILD'); 
+          
           setModalState(prev => ({ ...prev, isOpen: false }));
+          
+          // Re-trigger arrival to check if we can pay toll now (re-open PAY_TOLL if enough funds)
+          // Or just stay in SELL_LAND if not enough? 
+          // Current logic: close modal -> handleArrival -> re-evaluate.
           setTimeout(() => {
               const currentPos = roomData?.players[currentUser.uid].position;
               if (currentPos !== undefined) handleArrival(currentPos);
@@ -534,6 +611,11 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
   return (
     <div className="flex flex-col h-full w-full bg-[#050505] overflow-hidden relative">
       
+      {/* Turn Start Flash Effect */}
+      {showTurnEffect && (
+        <div className="fixed inset-0 z-[200] pointer-events-none shadow-[inset_0_0_100px_rgba(245,132,26,0.5)] animate-flash-twice" />
+      )}
+
       {/* Rules Modal */}
       <GameRulesModal isOpen={showRules} onClose={() => setShowRules(false)} />
 
@@ -545,7 +627,7 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
         playerBalance={myPlayer?.balance || 0}
         onConfirm={handleModalConfirm}
         onCancel={handleModalCancel}
-        onSell={handleSellAsset}
+        onSell={handleSellAssets}
         tollAmount={modalState.tollAmount}
         ownedLands={myOwnedCells}
         goldenKeyData={modalState.goldenKeyData}
@@ -603,6 +685,8 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
                 isAnimating={isAnimating}
                 diceRolling={diceRolling}
                 shownDiceValues={shownDiceValues}
+                isProcessing={isProcessing} 
+                isModalOpen={modalState.isOpen} // Pass modal state to control timer
                 onRollDice={handleRollDice}
                 onEscapeIsland={handleEscapeIsland}
                 onStartGame={handleStartGame}
