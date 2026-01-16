@@ -48,8 +48,8 @@ export const GameCenterPanel: React.FC<GameCenterPanelProps> = ({
     if (isWaiting || roomData.status === 'FINISHED') return;
     
     const interval = setInterval(() => {
-        // Pausing timer visually if modal is open to indicate "Thinking Time" or processing
-        if (isModalOpen || isProcessing) return;
+        // Pausing timer visually if modal is open to indicate "Thinking Time"
+        if (isModalOpen) return;
 
         if (!roomData.turnDeadline) {
             setPercent(100);
@@ -67,7 +67,7 @@ export const GameCenterPanel: React.FC<GameCenterPanelProps> = ({
     }, 100);
 
     return () => clearInterval(interval);
-  }, [roomData.turnDeadline, isWaiting, roomData.status, isModalOpen, isProcessing]);
+  }, [roomData.turnDeadline, isWaiting, roomData.status, isModalOpen]);
 
   const canInteract = isMyTurn && !isAnimating && !diceRolling && !isProcessing;
 

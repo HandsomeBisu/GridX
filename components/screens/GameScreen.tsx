@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Skull, Crown, HandCoins, RotateCw, Bell, Eye } from 'lucide-react';
+import { Skull, Crown, HandCoins, RotateCw } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { GameEventModal, ModalType } from '../game/GameEventModal';
 import { GameRulesModal } from '../ui/GameRulesModal'; // Import Rules Modal
@@ -56,9 +56,6 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
   const [showRules, setShowRules] = useState(false); // Rules Modal State
   const [showTurnEffect, setShowTurnEffect] = useState(false);
   
-  // New System Message Popup State
-  const [systemNotification, setSystemNotification] = useState<{ text: string, colorClass: string, icon?: React.ReactNode } | null>(null);
-  
   // Refs
   const prevPlayersRef = useRef<Record<string, Player>>({});
   const processedActionIdRef = useRef<number>(0);
@@ -94,17 +91,15 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
       const unsubscribe = GameService.subscribeToRoom(roomId, (data) => {
           if (data) {
               setRoomData(data);
+              // Sync Dice Values initially or when changed, BUT wait for animation if we triggered it
+              // If we are NOT animating, sync immediately (e.g., page refresh)
               if (!isAnimating) {
                    setShownDiceValues(data.lastDiceValues || [1, 1]);
               }
           } else {
-              setRoomData((prev) => {
-                  if (prev && prev.status === 'FINISHED') return prev;
-                  playSound('ERROR');
-                  alert("호스트가 방을 나갔거나 게임이 종료되었습니다.");
-                  onQuit();
-                  return null;
-              });
+              playSound('ERROR');
+              alert("호스트가 방을 나갔거나 게임이 종료되었습니다.");
+              onQuit();
           }
       });
       return () => unsubscribe();
@@ -114,15 +109,16 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
   useEffect(() => {
       if (!roomData || !currentUser || !roomId) return;
       
-      // FIXED: Do not force end turn if modal is open OR if we are processing an event
-      if (modalState.isOpen || isProcessing) return;
+      // STOP TIMER Logic: If modal is open, don't check for timeout
+      if (modalState.isOpen) return;
 
       const myPlayer = roomData.players[currentUser.uid];
       if (myPlayer?.isTurn && roomData.status === 'PLAYING' && roomData.turnDeadline) {
           const checkTimer = setInterval(() => {
-              if (modalState.isOpen || isProcessing) return;
-              
-              if (Date.now() > roomData.turnDeadline! + 2000) { 
+              if (Date.now() > roomData.turnDeadline! + 2000) { // Buffer 2s to avoid racing with server
+                  // Force pass locally if needed or just wait for another player to trigger it
+                  // Ideally, ANY client can trigger forceEndTurn for the current player if expired.
+                  // We'll let the current player trigger it themselves first.
                   if (myPlayer.isTurn) {
                       GameService.forceEndTurn(roomId, currentUser.uid).catch(console.error);
                   }
@@ -130,70 +126,23 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
           }, 1000);
           return () => clearInterval(checkTimer);
       }
-  }, [roomData, currentUser, roomId, modalState.isOpen, isProcessing]);
+  }, [roomData, currentUser, roomId, modalState.isOpen]);
 
-  // 4. Last Action Processing (Logs, Sounds, Floating Text, System Popup)
+  // 4. Last Action Processing (Logs, Sounds, Floating Text)
   useEffect(() => {
      if (roomData?.lastAction && currentUser) {
          const action = roomData.lastAction;
          
+         // Prevent double processing same timestamp action
          if (action.timestamp <= processedActionIdRef.current) return;
          processedActionIdRef.current = action.timestamp;
 
+         // -- Floating Text Logic --
          const subjectPlayer = roomData.players[action.subjectId];
          const targetPlayer = action.targetId ? roomData.players[action.targetId] : null;
 
-         // --- SYSTEM POPUP LOGIC ---
-         let popupColor = "border-gray-500 text-gray-200 shadow-gray-500/50";
-         let popupIcon = <Bell size={18} />;
-
-         if (['BUY'].includes(action.type)) {
-             popupColor = "border-gold-500 text-gold-300 shadow-gold-500/50";
-             popupIcon = <Crown size={18} />;
-         } else if (['PAY_TOLL', 'BANKRUPT', 'ESCAPE_FAIL', 'TIMEOUT'].includes(action.type)) {
-             popupColor = "border-red-500 text-red-300 shadow-red-500/50";
-             popupIcon = <Skull size={18} />;
-         } else if (['SELL', 'WELFARE', 'ESCAPE_SUCCESS'].includes(action.type)) {
-             const isPay = action.type === 'WELFARE' && action.message.includes('납부');
-             if (isPay) {
-                popupColor = "border-red-500 text-red-300 shadow-red-500/50";
-             } else {
-                popupColor = "border-green-500 text-green-300 shadow-green-500/50";
-                popupIcon = <HandCoins size={18} />;
-             }
-         } else if (['GOLD_KEY', 'SPACE_TRAVEL', 'TELEPORT'].includes(action.type)) {
-             popupColor = "border-purple-500 text-purple-300 shadow-purple-500/50";
-         } else if (['MOVE', 'START_TURN'].includes(action.type)) {
-             popupColor = "border-blue-500 text-blue-300 shadow-blue-500/50";
-         } else if (['WIN'].includes(action.type)) {
-             popupColor = "border-gold-500 text-gold-100 bg-gold-900 shadow-gold-500";
-             popupIcon = <Crown size={24} />;
-         }
-
-         let fullText = "";
-         if (roomData.chat && roomData.chat.length > 0) {
-             const lastChat = roomData.chat[roomData.chat.length - 1];
-             if (lastChat.type === 'SYSTEM' && Math.abs(lastChat.timestamp - action.timestamp) < 500) {
-                 fullText = lastChat.text;
-             }
-         }
-         
-         if (!fullText) {
-             fullText = `${subjectPlayer?.name || 'Unknown'}: ${action.message}`;
-         }
-
-         setSystemNotification({ text: fullText, colorClass: popupColor, icon: popupIcon });
-         
-         if (action.subjectId !== currentUser.uid && ['BUY', 'PAY_TOLL', 'GOLD_KEY', 'WELFARE', 'TELEPORT', 'WIN', 'BANKRUPT'].includes(action.type)) {
-             playSound('NOTICE');
-         }
-
-         setTimeout(() => {
-             setSystemNotification(null);
-         }, 4000);
-
-         // --- FLOATING TEXT LOGIC ---
          if (action.amount && action.amount > 0) {
+             
              if (action.type === 'PAY_TOLL') {
                  if (subjectPlayer) spawnFloatingText(subjectPlayer.position, `- ${formatPrice(action.amount)}`, '#EF4444');
                  if (targetPlayer) spawnFloatingText(targetPlayer.position, `+ ${formatPrice(action.amount)}`, '#10B981');
@@ -207,37 +156,36 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
              }
          }
          
+         // GOLD KEY SPECIAL
          if (action.type === 'GOLD_KEY' && action.amount) {
              const color = action.amount > 0 ? '#10B981' : '#EF4444';
-             const sign = action.amount > 0 ? '+' : ''; 
+             const sign = action.amount > 0 ? '+' : ''; // negative has sign
              if (subjectPlayer) spawnFloatingText(subjectPlayer.position, `${sign} ${formatPrice(action.amount)}`, color);
          }
 
-         // -- SPECIFIC SOUNDS --
-         // Money Received: Play only for the target player
+         // -- Toast / Sound Logic --
          if (action.type === 'PAY_TOLL' && action.targetId === currentUser.uid) {
-             playSound('GET_MONEY');
+             playSound('BUILD');
              const payerName = roomData.players[action.subjectId]?.name || '알 수 없음';
              setReceivedToll({ from: payerName, amount: action.amount || 0 });
              const timer = setTimeout(() => { setReceivedToll(null); }, 4000);
          }
-
-         if (action.type === 'BANKRUPT') {
-             playSound('BANKRUPT');
-         }
          
          if (action.type === 'MOVE' && action.subjectId === currentUser.uid && action.message.includes('월급')) {
-            playSound('GET_MONEY');
+            playSound('BUILD');
             setSalaryNotification(true);
             setTimeout(() => { setSalaryNotification(false); }, 3000);
          }
          
          if (action.type === 'ESCAPE_FAIL' && action.subjectId === currentUser.uid) {
+             // Island Stay Logic: Show dice roll, then end turn
+             // We block processing to prevent double clicks
              setIsProcessing(true);
              playSound('ERROR');
              
              spawnFloatingText(roomData.players[currentUser.uid].position, action.message, '#EF4444');
 
+             // Trigger Dice Animation for feedback
              setDiceRolling(true);
              playSound('DICE_ROLL');
 
@@ -260,7 +208,13 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
   }, [roomData?.lastAction, currentUser]);
 
   const spawnFloatingText = (posIdx: number, text: string, color: string) => {
+      // Calculate % position based on grid index
       const { row, col } = getGridPosition(posIdx);
+      // Convert grid row/col (1-11) to percentage (0-100)
+      // Grid is 11x11. 
+      // col 1 -> 0%, col 11 -> 100%
+      // But we want center of cell. 
+      // cell width is roughly 9%. 
       const x = ((col - 1) * 9) + 4.5; 
       const y = ((row - 1) * 9) + 4.5;
 
@@ -270,6 +224,8 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
       };
       
       setFloatingTexts(prev => [...prev, newText]);
+      
+      // Cleanup
       setTimeout(() => {
           setFloatingTexts(prev => prev.filter(t => t.id !== newText.id));
       }, 2000);
@@ -307,16 +263,20 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
           setVisualPositions(newVisualPositions);
       }
 
+      // Check if animation needed
       if (playersToAnimate.length > 0 && !isAnimating) {
           animateMultiplePlayers(playersToAnimate);
       } 
+      // Removed incorrect START_TURN arrival triggering logic to fix bug where next player gets stuck at Start
       
   }, [roomData, currentUser]); 
 
   const animateMultiplePlayers = async (moves: { uid: string, start: number, end: number }[]) => {
       setIsAnimating(true);
+      // Ensure we clear processing state if we start animating a move
       setIsProcessing(false); 
       
+      // Dice Animation Logic
       const isTeleport = roomData?.lastAction?.type === 'TELEPORT';
       const isStartTurn = roomData?.lastAction?.type === 'START_TURN';
 
@@ -324,11 +284,13 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
            setDiceRolling(true);
            playSound('DICE_ROLL');
            
+           // Rolling duration
            await new Promise(resolve => setTimeout(resolve, 800));
            
            setDiceRolling(false);
            setShownDiceValues(roomData.lastDiceValues);
            
+           // Pause to let user see result
            await new Promise(resolve => setTimeout(resolve, 500)); 
       }
 
@@ -370,11 +332,13 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
   const isSpaceTravelMode = isMyTurn && myPlayer?.position === 10 && !isAnimating && !modalState.isOpen;
   const isStuckOnIsland = isMyTurn && (myPlayer?.islandTurns || 0) > 0;
 
+  // Turn Notification Effect
   useEffect(() => {
     if (isMyTurn && !prevIsMyTurnRef.current) {
       playSound('TURN_START');
       setShowTurnEffect(true);
       setTimeout(() => setShowTurnEffect(false), 2000);
+      // Reset processing flag on new turn to be safe
       setIsProcessing(false);
     }
     prevIsMyTurnRef.current = isMyTurn;
@@ -413,12 +377,13 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
 
   const handleDeclareBankruptcy = async () => {
       if (!roomId || !currentUser) return;
-      try {
-          await GameService.declareBankruptcy(roomId, currentUser.uid);
-          setModalState(prev => ({ ...prev, isOpen: false }));
-          // Note: Spectator mode is handled by UI state
-      } catch (e) {
-          console.error(e);
+      if (window.confirm("정말 파산 선언을 하시겠습니까? 게임에서 즉시 탈락합니다.")) {
+          try {
+              await GameService.declareBankruptcy(roomId, currentUser.uid);
+              onQuit();
+          } catch (e) {
+              console.error(e);
+          }
       }
   };
 
@@ -426,12 +391,16 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
     if (isAnimating || isProcessing || modalState.isOpen || !isMyTurn || !roomId || !currentUser) return;
     if (isSpaceTravelMode) return;
     
+    // Set processing TRUE immediately to block double clicks during network request
     setIsProcessing(true);
 
     try {
         await GameService.rollDice(roomId, currentUser.uid);
+        // Note: We DO NOT set isProcessing(false) here. 
+        // It will be reset by either animateMultiplePlayers (normal move) or the ESCAPE_FAIL handler (island).
     } catch (e) {
         console.error(e);
+        // Only reset if error occurred preventing any action
         setIsProcessing(false);
     }
   };
@@ -441,6 +410,10 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
       setIsProcessing(true);
       try {
           await GameService.escapeIsland(roomId, currentUser.uid);
+          // Don't reset isProcessing here either, let the action listener handle it or UI update
+          // Actually escapeIsland updates state immediately, user is free.
+          // The UI will re-render, button becomes available. 
+          // We can reset here because no animation triggers automatically for simple escape pay.
           setIsProcessing(false);
       } catch (e: any) {
           alert(e);
@@ -461,23 +434,17 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
     const cell = BOARD_DATA.find(c => c.id === pos);
     if (!cell) { handleEndTurn(); return; }
 
+    // If I'm stuck, I shouldn't trigger events (this protects against glitches)
     if ((myPlayer?.islandTurns || 0) > 0) return;
 
+    // Special Case: Golden Key
     if (cell.type === 'GOLD_KEY' && roomId && currentUser) {
-        setIsProcessing(true); 
+        setIsProcessing(true); // BLOCK interactions
         try {
-            await new Promise(resolve => setTimeout(resolve, 800)); // Ensure buffer time
+            // Wait slightly for animation to settle visually, but block controls
+            await new Promise(resolve => setTimeout(resolve, 500));
             const data = await GameService.applyGoldenKey(roomId, currentUser.uid);
-            
-            // Wait a tick to ensure data is synced before opening modal
-            await new Promise(resolve => setTimeout(resolve, 300));
-            
-            // Set modal state but keep isProcessing true until user closes modal? 
-            // Actually, we should unset isProcessing so Timer can pause visually or something, 
-            // but we need to prevent double actions. 
-            // Setting isProcessing=false here allows the modal to be the blocker.
-            
-            setIsProcessing(false); 
+            setIsProcessing(false); // UNBLOCK when modal opens
             setModalState({ isOpen: true, type: 'GOLD_KEY', cellData: cell, goldenKeyData: data });
         } catch (e) { 
             console.error(e); 
@@ -487,11 +454,13 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
         return;
     }
 
+    // Welfare Pay
     if (cell.id === 30 && roomId && currentUser) {
         setModalState({ isOpen: true, type: 'WELFARE_PAY', cellData: cell });
         return;
     }
 
+    // Welfare Receive
     if (cell.id === 38 && roomId && currentUser) {
         setIsProcessing(true);
         try {
@@ -506,6 +475,7 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
         return;
     }
 
+    // Space Travel
     if (cell.id === 10 && roomId && currentUser) {
         setModalState({ isOpen: true, type: 'SPACE_TRAVEL', cellData: cell });
         return;
@@ -569,7 +539,7 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
         try { await GameService.payWelfareFund(roomId, currentUser.uid, 150000); playSound('BUILD'); } catch (e) {}
     }
 
-    if (modalState.type === 'WELFARE_RECEIVE') { playSound('GET_MONEY'); }
+    if (modalState.type === 'WELFARE_RECEIVE') { playSound('BUILD'); }
     
     setModalState(prev => ({ ...prev, isOpen: false }));
     handleEndTurn();
@@ -578,31 +548,15 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
   const handleSellAssets = async (cellIds: number[]) => {
       if (!roomId || !currentUser) return;
       try {
+          // Process multiple sells
           await Promise.all(cellIds.map(id => GameService.sellLand(roomId, currentUser.uid, id)));
           playSound('BUILD'); 
           
-          // Check if user has enough balance now to pay toll (locally estimated)
-          if (modalState.type === 'SELL_LAND' && modalState.tollAmount && modalState.cellData?.owner) {
-             const soldValue = myOwnedCells.filter(c => cellIds.includes(c.id)).reduce((acc, c) => acc + (c.price || 0), 0); // Approx
-             const currentBalance = myPlayer?.balance || 0;
-             const estimatedNewBalance = currentBalance + soldValue; 
-
-             // Since GameEventModal already validated "isEnough", we can proceed to Pay Toll immediately.
-             
-             try {
-                // Execute Pay Toll Immediately
-                await GameService.payToll(roomId, currentUser.uid, modalState.cellData.owner, modalState.tollAmount);
-                playSound('PAY_TOLL');
-                setModalState(prev => ({ ...prev, isOpen: false }));
-                handleEndTurn();
-                return;
-             } catch (e) {
-                 console.error("Auto Pay Failed", e);
-             }
-          }
-
           setModalState(prev => ({ ...prev, isOpen: false }));
           
+          // Re-trigger arrival to check if we can pay toll now (re-open PAY_TOLL if enough funds)
+          // Or just stay in SELL_LAND if not enough? 
+          // Current logic: close modal -> handleArrival -> re-evaluate.
           setTimeout(() => {
               const currentPos = roomData?.players[currentUser.uid].position;
               if (currentPos !== undefined) handleArrival(currentPos);
@@ -628,13 +582,12 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
 
   if (!roomData) return <div className="flex items-center justify-center h-full text-gold-500 font-mono animate-pulse">CONNECTING TO GRID...</div>;
 
-  // --- WINNER / GAME OVER SCREEN ---
-  // Only show if game is finished OR if I won
+  // --- WINNER SCREEN ---
   if (roomData.status === 'FINISHED' && roomData.winnerId) {
       const winner = roomData.players[roomData.winnerId];
       const isMe = currentUser?.uid === roomData.winnerId;
       return (
-          <div className="flex flex-col items-center justify-center h-full bg-black relative overflow-hidden z-[200]">
+          <div className="flex flex-col items-center justify-center h-full bg-black relative overflow-hidden">
                <div className="absolute inset-0 bg-gold-500/10 animate-pulse-slow"></div>
                <div className="z-10 text-center p-8 bg-luxury-panel border-2 border-gold-500 rounded-lg shadow-2xl animate-fade-in-up">
                    <Crown size={80} className="text-gold-500 mx-auto mb-6 animate-bounce" />
@@ -642,27 +595,29 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
                        {isMe ? "VICTORY!" : "GAME OVER"}
                    </h1>
                    <p className="text-gold-400 text-xl font-serif mb-8 uppercase tracking-widest">
-                       {isMe ? "최후의 승자가 되었습니다!" : `${winner?.name || 'Unknown'} 님의 승리입니다.`}
+                       {isMe ? "최후의 승자가 되었습니다!" : `${winner.name} 님의 승리입니다.`}
                    </p>
-                   <Button variant="primary" size="lg" onClick={handleLeaveGame}>로비로 돌아가기</Button>
+                   <Button variant="primary" size="lg" onClick={onQuit}>로비로 돌아가기</Button>
                </div>
           </div>
       );
   }
 
-  // --- SPECTATOR MODE (Banner only) ---
-  const isSpectating = myPlayer?.isBankrupt;
+  // --- SPECTATOR / BANKRUPT SCREEN ---
+  if (myPlayer?.isBankrupt) {
+      return (
+        <div className="flex flex-col items-center justify-center h-full bg-black/90 relative z-50">
+             <Skull size={64} className="text-gray-500 mb-4" />
+             <h2 className="text-3xl font-bold text-red-500 mb-2">YOU ARE BANKRUPT</h2>
+             <p className="text-gray-400 mb-6">파산하여 게임에서 탈락했습니다. 관전 모드로 전환됩니다.</p>
+             <Button variant="secondary" onClick={onQuit}>나가기</Button>
+        </div>
+      );
+  }
 
   return (
     <div className="flex flex-col h-full w-full bg-[#050505] overflow-hidden relative">
       
-      {/* Spectator Indicator */}
-      {isSpectating && (
-          <div className="absolute top-0 left-0 right-0 z-[190] bg-red-900/80 text-white text-center py-2 text-sm font-bold tracking-widest border-b border-red-500 animate-pulse shadow-lg flex justify-center items-center gap-2">
-              <Eye size={16} /> YOU ARE IN SPECTATOR MODE - 관전 중
-          </div>
-      )}
-
       {/* Turn Start Flash Effect */}
       {showTurnEffect && (
         <div className="fixed inset-0 z-[200] pointer-events-none shadow-[inset_0_0_100px_rgba(245,132,26,0.5)] animate-flash-twice" />
@@ -670,18 +625,6 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
 
       {/* Rules Modal */}
       <GameRulesModal isOpen={showRules} onClose={() => setShowRules(false)} />
-
-      {/* SYSTEM MESSAGE POPUP */}
-      {systemNotification && (
-          <div className={`fixed top-[15%] left-1/2 -translate-x-1/2 z-[150] w-[80%] max-w-2xl bg-black/80 backdrop-blur-md border px-6 py-4 rounded-lg shadow-[0_0_30px_rgba(0,0,0,0.5)] flex items-center gap-4 animate-fade-in-up ${systemNotification.colorClass}`}>
-              <div className="p-2 bg-white/5 rounded-full border border-white/10 shrink-0">
-                  {systemNotification.icon}
-              </div>
-              <div className="flex-1 font-bold text-sm md:text-base leading-snug">
-                  {systemNotification.text}
-              </div>
-          </div>
-      )}
 
       <GameEventModal 
         isOpen={modalState.isOpen}
@@ -692,7 +635,7 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
         onConfirm={handleModalConfirm}
         onCancel={handleModalCancel}
         onSell={handleSellAssets}
-        onDeclareBankruptcy={handleDeclareBankruptcy}
+        onDeclareBankruptcy={handleDeclareBankruptcy} // Pass Bankruptcy Handler
         tollAmount={modalState.tollAmount}
         ownedLands={myOwnedCells}
         goldenKeyData={modalState.goldenKeyData}
