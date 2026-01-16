@@ -585,11 +585,9 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
           if (modalState.type === 'SELL_LAND' && modalState.tollAmount && modalState.cellData?.owner) {
              const soldValue = myOwnedCells.filter(c => cellIds.includes(c.id)).reduce((acc, c) => acc + (c.price || 0), 0); // Approx
              const currentBalance = myPlayer?.balance || 0;
-             const estimatedNewBalance = currentBalance + soldValue; // Note: sellLand in service returns full investment including buildings, so this is rough estimate for client
+             const estimatedNewBalance = currentBalance + soldValue; 
 
              // Since GameEventModal already validated "isEnough", we can proceed to Pay Toll immediately.
-             // We use a slight delay to allow the Sell action to propagate or just assume it worked.
-             // Better yet, just call payToll now.
              
              try {
                 // Execute Pay Toll Immediately
