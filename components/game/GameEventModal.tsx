@@ -81,7 +81,7 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
     } else {
         hasPlayedSoundRef.current = false;
     }
-  }, [isOpen, type]); // Removed currentBuildings dependency to prevent double sound
+  }, [isOpen, type]); 
 
   if (!isOpen) return null;
 
@@ -94,7 +94,7 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
   // --- RENDERERS ---
 
   const renderWelfarePayContent = () => (
-      <div className="text-center py-6 space-y-4">
+      <div className="text-center py-6 space-y-4 px-4">
           <div className="w-24 h-24 mx-auto bg-red-900/20 rounded-full flex items-center justify-center border border-red-500/50">
               <HandCoins size={48} className="text-red-400" />
           </div>
@@ -107,7 +107,7 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
   );
 
   const renderWelfareReceiveContent = () => (
-      <div className="text-center py-6 space-y-4">
+      <div className="text-center py-6 space-y-4 px-4">
           <div className="w-24 h-24 mx-auto bg-green-900/20 rounded-full flex items-center justify-center border border-green-500/50 animate-pulse">
               <Gift size={48} className="text-green-400" />
           </div>
@@ -124,7 +124,7 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
   );
 
   const renderSpaceTravelContent = () => (
-      <div className="text-center py-6 space-y-4">
+      <div className="text-center py-6 space-y-4 px-4">
           <div className="w-24 h-24 mx-auto bg-purple-900/20 rounded-full flex items-center justify-center border border-purple-500/50">
               <Rocket size={48} className="text-purple-400" />
           </div>
@@ -147,6 +147,7 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
       
       // Calculate Total Potential Asset Value (Cash + Sell Value of All Lands)
       const totalAssetValue = playerBalance + ownedLands.reduce((sum, land) => sum + (land.price || 0), 0);
+      // Logic: If total assets < toll, player is bankrupt.
       const isBankrupt = totalAssetValue < tollAmount;
 
       const toggleSelection = (id: number) => {
@@ -157,16 +158,17 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
       // Auto Bankruptcy Effect if impossible to pay
       useEffect(() => {
           if (isBankrupt && onDeclareBankruptcy) {
+               // Give user 3 seconds to realize they are broke
                const timer = setTimeout(() => {
                    onDeclareBankruptcy();
-                   onCancel();
+                   // Do not close modal immediately here, usually handleDeclareBankruptcy will close it or refresh state
                }, 3000);
                return () => clearTimeout(timer);
           }
       }, [isBankrupt]);
 
       return (
-          <div className="flex flex-col h-full max-h-[60vh]">
+          <div className="flex flex-col h-full max-h-[60vh] min-w-[320px]">
               <div className="bg-red-900/20 border border-red-500/30 p-4 rounded text-center mb-4 shrink-0">
                   <h3 className="text-red-400 font-bold mb-1 flex items-center justify-center gap-2"><AlertOctagon size={16}/> 자금 부족!</h3>
                   <p className="text-xs text-gray-400">통행료 지불을 위해 보유 자산을 매각해야 합니다.</p>
@@ -224,7 +226,7 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
 
                   {isBankrupt ? (
                       <div className="w-full py-3 bg-red-900/80 border border-red-600 rounded text-center text-red-200 animate-pulse font-bold">
-                          ⚠️ 자산 부족으로 곧 파산 처리됩니다...
+                          ⚠️ 자산 부족! 곧 자동으로 파산 처리됩니다...
                       </div>
                   ) : (
                       <Button 
@@ -248,13 +250,13 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
       const isMove = data?.type === 'MOVE';
 
       return (
-          <div className="text-center py-6 space-y-6">
+          <div className="text-center py-6 space-y-6 px-4">
                <div className="w-24 h-24 mx-auto bg-gold-500/20 rounded-full flex items-center justify-center animate-pulse">
                    <Key size={48} className="text-gold-400" />
                </div>
                <div>
                    <h2 className="text-2xl font-bold text-gold-300 mb-2">{data?.title || "황금열쇠"}</h2>
-                   <p className="text-gray-300 px-4 leading-relaxed">{data?.description}</p>
+                   <p className="text-gray-300 px-4 leading-relaxed whitespace-pre-wrap">{data?.description}</p>
                </div>
                
                {amount !== undefined && amount !== 0 && (
@@ -414,7 +416,7 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
 
   const renderPayTollContent = () => {
     return (
-        <div className="text-center space-y-6 py-4">
+        <div className="text-center space-y-6 py-4 px-4">
             <div className="flex flex-col items-center gap-2">
                 <AlertOctagon size={48} className="text-red-500 animate-bounce" />
                 <h3 className="text-2xl font-bold text-red-500">통행료 지불</h3>
@@ -454,7 +456,7 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
   };
 
   const renderInfoContent = () => (
-     <div className="py-8 text-center text-gray-300">
+     <div className="py-8 text-center text-gray-300 px-4">
         <p className="text-2xl font-serif mb-2 text-white">{cellData?.name}</p>
         <p className="text-sm text-gray-500 px-8">특별한 이벤트가 없는 평화로운 지역입니다.</p>
         <div className="mt-8">
@@ -467,7 +469,7 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
 
   return (
     <div className="absolute inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fade-in-up">
-      <div className={`relative w-full ${type === 'INFO' ? 'max-w-md' : 'max-w-lg'} bg-luxury-panel border border-gold-600 rounded-lg shadow-[0_0_60px_rgba(245,132,26,0.3)] overflow-hidden flex flex-col max-h-[90vh]`}>
+      <div className={`relative w-auto min-w-[400px] max-w-2xl bg-luxury-panel border border-gold-600 rounded-lg shadow-[0_0_60px_rgba(245,132,26,0.3)] overflow-hidden flex flex-col max-h-[90vh]`}>
         
         {/* Header - Always show for context, including BUY_LAND now */}
         <div className="h-24 relative overflow-hidden bg-black shrink-0">
@@ -509,7 +511,7 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
         </div>
 
         {/* Content Body */}
-        <div className="p-5 overflow-y-auto">
+        <div className="p-0 overflow-y-auto">
            {type === 'SELL_LAND' && renderSellLandContent()}
            {type === 'GOLD_KEY' && renderGoldenKeyContent()}
            {type === 'BUY_LAND' && renderBuyLandContent()}
