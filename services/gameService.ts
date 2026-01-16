@@ -28,19 +28,21 @@ const getRandomColor = () => {
   return colors[Math.floor(Math.random() * colors.length)];
 };
 
-const createSystemMessage = (text: string): ChatMessage => ({
+// Updated to accept explicit timestamp for synchronization
+const createSystemMessage = (text: string, timestamp: number = Date.now()): ChatMessage => ({
   id: Math.random().toString(36).substring(2, 9),
   senderId: 'SYSTEM',
   senderName: 'SYSTEM',
   text,
   type: 'SYSTEM',
-  timestamp: Date.now(),
+  timestamp: timestamp,
 });
 
 export const GameService = {
   createRoom: async (hostUser: { uid: string, displayName: string | null }, roomName: string): Promise<string> => {
     const roomId = generateRoomId();
     const roomRef = doc(db, ROOMS_COLLECTION, roomId);
+    const now = Date.now();
 
     const initialPlayer: Player = {
       id: hostUser.uid,
@@ -66,9 +68,9 @@ export const GameService = {
       playerOrder: [hostUser.uid],
       ownership: {},
       currentTurnIndex: 0,
-      createdAt: Date.now(),
+      createdAt: now,
       welfareFund: 0,
-      chat: [createSystemMessage(`방이 생성되었습니다. 환영합니다!`)], // Initialize Chat
+      chat: [createSystemMessage(`방이 생성되었습니다. 환영합니다!`, now)], // Initialize Chat
     };
 
     await setDoc(roomRef, newRoom);
@@ -101,8 +103,9 @@ export const GameService = {
         islandTurns: 0,
       };
 
+      const now = Date.now();
       // Request: <닉네임> 님이 게임에 참가했습니다.
-      const joinMsg = createSystemMessage(`${newPlayer.name} 님이 게임에 참가했습니다.`);
+      const joinMsg = createSystemMessage(`${newPlayer.name} 님이 게임에 참가했습니다.`, now);
 
       transaction.update(roomRef, {
         [`players.${user.uid}`]: newPlayer,
@@ -124,19 +127,22 @@ export const GameService = {
           const player = roomData.players[userId];
           if (!player) return;
 
-          if (player.isHost) {
+          // Remove the player from local object
+          const newPlayers = { ...roomData.players };
+          delete newPlayers[userId];
+          
+          // Logic: If Host leaves OR No players left -> Delete Room immediately
+          if (player.isHost || Object.keys(newPlayers).length === 0) {
               transaction.delete(roomRef);
           } else {
-              const newPlayers = { ...roomData.players };
-              delete newPlayers[userId];
               const newOrder = roomData.playerOrder.filter(id => id !== userId);
-
               let newTurnIndex = roomData.currentTurnIndex;
               if (newTurnIndex >= newOrder.length) {
                   newTurnIndex = 0;
               }
 
-              const leaveMsg = createSystemMessage(`${player.name} 님이 게임을 떠났습니다.`);
+              const now = Date.now();
+              const leaveMsg = createSystemMessage(`${player.name} 님이 게임을 떠났습니다.`, now);
 
               transaction.update(roomRef, {
                   players: newPlayers,
@@ -183,11 +189,12 @@ export const GameService = {
             throw new Error("게임을 시작하려면 최소 2명의 플레이어가 필요합니다.");
         }
 
-        const startMsg = createSystemMessage("게임이 시작되었습니다!");
+        const now = Date.now();
+        const startMsg = createSystemMessage("게임이 시작되었습니다!", now);
 
         transaction.update(roomRef, { 
             status: 'PLAYING',
-            turnDeadline: Date.now() + TURN_DURATION_MS,
+            turnDeadline: now + TURN_DURATION_MS,
             chat: [...(roomData.chat || []), startMsg]
         });
     });
@@ -209,18 +216,19 @@ export const GameService = {
                }
                const nextPlayerId = roomData.playerOrder[nextIdx];
                
-               const msg = createSystemMessage(`${roomData.players[playerId].name} 님의 턴이 시간 초과로 넘어갑니다.`);
+               const now = Date.now();
+               const msg = createSystemMessage(`${roomData.players[playerId].name} 님의 턴이 시간 초과로 넘어갑니다.`, now);
 
                transaction.update(roomRef, {
                    currentTurnIndex: nextIdx,
                    [`players.${playerId}.isTurn`]: false,
                    [`players.${nextPlayerId}.isTurn`]: true,
-                   turnDeadline: Date.now() + TURN_DURATION_MS,
+                   turnDeadline: now + TURN_DURATION_MS,
                    lastAction: {
                        type: 'TIMEOUT',
                        message: '시간 초과! 턴이 강제로 넘어갑니다.',
                        subjectId: playerId,
-                       timestamp: Date.now()
+                       timestamp: now
                    },
                    chat: [...(roomData.chat || []), msg]
                });
@@ -238,14 +246,15 @@ export const GameService = {
 
           if (player.balance < ISLAND_ESCAPE_COST) throw "잔액이 부족합니다.";
 
-          const msg = createSystemMessage(`${player.name} 님이 비용을 지불하고 무인도를 탈출했습니다.`);
+          const now = Date.now();
+          const msg = createSystemMessage(`${player.name} 님이 비용을 지불하고 무인도를 탈출했습니다.`, now);
 
           const action: GameAction = {
               type: 'ESCAPE_SUCCESS',
               message: '탈출 비용 지불 및 석방',
               subjectId: playerId,
               amount: ISLAND_ESCAPE_COST,
-              timestamp: Date.now()
+              timestamp: now
           };
 
           transaction.update(roomRef, {
@@ -273,7 +282,8 @@ export const GameService = {
       const d2 = Math.floor(Math.random() * 6) + 1;
       const totalSteps = d1 + d2;
       
-      const decisionTime = Date.now() + 60000; 
+      const now = Date.now();
+      const decisionTime = now + 60000; 
 
       // Island Logic
       if (player.islandTurns > 0) {
@@ -282,7 +292,7 @@ export const GameService = {
               type: 'ESCAPE_FAIL',
               message: nextTurns > 0 ? `무인도 체류 중.. 남은 턴: ${nextTurns}` : `무인도 형기 종료. 다음 턴에 이동.`,
               subjectId: playerId,
-              timestamp: Date.now()
+              timestamp: now
           };
 
           transaction.update(roomRef, {
@@ -303,20 +313,20 @@ export const GameService = {
       if (newPosition < player.position) {
           newBalance += SALARY_AMOUNT; 
           salaryMsg = ' (월급 수령)';
-          chatUpdate = [...chatUpdate, createSystemMessage(`${player.name} 님이 월급 ${SALARY_AMOUNT.toLocaleString()}원을 수령했습니다.`)];
+          chatUpdate = [...chatUpdate, createSystemMessage(`${player.name} 님이 월급 ${SALARY_AMOUNT.toLocaleString()}원을 수령했습니다.`, now)];
       }
 
       let islandTurns = 0;
       if (newPosition === 20) {
           islandTurns = 3;
-          chatUpdate = [...chatUpdate, createSystemMessage(`${player.name} 님이 무인도에 도착하여 3턴간 고립됩니다.`)];
+          chatUpdate = [...chatUpdate, createSystemMessage(`${player.name} 님이 무인도에 도착하여 3턴간 고립됩니다.`, now)];
       }
 
       const action: GameAction = {
           type: 'MOVE',
           message: `주사위 ${d1}+${d2}=${totalSteps} 이동${salaryMsg}`,
           subjectId: playerId,
-          timestamp: Date.now()
+          timestamp: now
       };
 
       transaction.update(roomRef, {
@@ -340,20 +350,21 @@ export const GameService = {
           const player = roomData.players[playerId];
 
           const targetCell = BOARD_DATA.find(c => c.id === targetPos);
-          const msg = createSystemMessage(`${player.name} 님이 ${targetCell?.name || '알 수 없는 곳'}(으)로 이동했습니다.`);
+          const now = Date.now();
+          const msg = createSystemMessage(`${player.name} 님이 ${targetCell?.name || '알 수 없는 곳'}(으)로 이동했습니다.`, now);
           
           const action: GameAction = {
               type: 'TELEPORT',
               message: targetPos === 20 ? '무인도로 강제 이동' : '이동',
               subjectId: playerId,
-              timestamp: Date.now()
+              timestamp: now
           };
 
           transaction.update(roomRef, {
               [`players.${playerId}.position`]: targetPos,
               [`players.${playerId}.islandTurns`]: targetPos === 20 ? 3 : 0,
               lastAction: action,
-              turnDeadline: Date.now() + 60000,
+              turnDeadline: now + 60000,
               chat: [...(roomData.chat || []), msg]
           });
       });
@@ -367,15 +378,16 @@ export const GameService = {
           const roomData = roomDoc.data() as GameRoom;
           
           const player = roomData.players[playerId];
+          const now = Date.now();
           
-          const msg = createSystemMessage(`${player.name} 님이 사회복지기금 ${amount.toLocaleString()}원을 기부했습니다.`);
+          const msg = createSystemMessage(`${player.name} 님이 사회복지기금 ${amount.toLocaleString()}원을 기부했습니다.`, now);
 
           const action: GameAction = {
               type: 'WELFARE',
               message: '사회복지기금 납부',
               subjectId: playerId,
               amount: amount,
-              timestamp: Date.now()
+              timestamp: now
           };
 
           transaction.update(roomRef, {
@@ -398,14 +410,15 @@ export const GameService = {
           if (fund === 0) return 0; 
           
           const player = roomData.players[playerId];
-          const msg = createSystemMessage(`${player.name} 님이 사회복지기금 ${fund.toLocaleString()}원을 수령했습니다!`);
+          const now = Date.now();
+          const msg = createSystemMessage(`${player.name} 님이 사회복지기금 ${fund.toLocaleString()}원을 수령했습니다!`, now);
 
           const action: GameAction = {
               type: 'WELFARE',
               message: '사회복지기금 수령',
               subjectId: playerId,
               amount: fund,
-              timestamp: Date.now()
+              timestamp: now
           };
 
           transaction.update(roomRef, {
@@ -451,12 +464,13 @@ export const GameService = {
             currentToll: Math.floor(newToll)
         };
 
+        const now = Date.now();
         const action: GameAction = {
             type: 'BUY',
             message: `${cellData?.name} 매입/건설`,
             subjectId: playerId,
             amount: cost,
-            timestamp: Date.now()
+            timestamp: now
         };
 
         // Determine if it's initial land buy or upgrade for chat message
@@ -475,7 +489,7 @@ export const GameService = {
              chatMsgText = `${player.name} 님이 ${cellData?.name}을(를) 구매하셨습니다.`;
         }
         
-        const msg = createSystemMessage(chatMsgText);
+        const msg = createSystemMessage(chatMsgText, now);
 
         transaction.update(roomRef, {
             [`ownership.${cellId}`]: ownershipData,
@@ -513,14 +527,15 @@ export const GameService = {
          const newOwnership = { ...roomData.ownership };
          delete newOwnership[cellId];
 
-         const msg = createSystemMessage(`${player.name} 님이 ${cellData.name}을(를) 매각하여 ${sellAmount.toLocaleString()}원을 확보했습니다.`);
+         const now = Date.now();
+         const msg = createSystemMessage(`${player.name} 님이 ${cellData.name}을(를) 매각하여 ${sellAmount.toLocaleString()}원을 확보했습니다.`, now);
 
          const action: GameAction = {
              type: 'SELL',
              message: `${cellData.name} 매각`,
              subjectId: playerId,
              amount: sellAmount,
-             timestamp: Date.now()
+             timestamp: now
          };
 
          transaction.update(roomRef, {
@@ -546,8 +561,9 @@ export const GameService = {
         
         const newPayerBalance = payer.balance - amount;
 
+        const now = Date.now();
         // Request: <통행료를 내는 사람>님이 <통행료를 받는 사람>님에게 통행료 <금액>을 지불했습니다.
-        const msg = createSystemMessage(`${payer.name} 님이 ${owner.name} 님에게 통행료 ${amount.toLocaleString()}원을 지불했습니다.`);
+        const msg = createSystemMessage(`${payer.name} 님이 ${owner.name} 님에게 통행료 ${amount.toLocaleString()}원을 지불했습니다.`, now);
 
         const action: GameAction = {
             type: 'PAY_TOLL',
@@ -555,7 +571,7 @@ export const GameService = {
             subjectId: payerId,
             targetId: ownerId,
             amount: amount,
-            timestamp: Date.now()
+            timestamp: now
         };
 
         transaction.update(roomRef, {
@@ -582,8 +598,9 @@ export const GameService = {
               }
           });
           
+          const now = Date.now();
           // Request: <닉네임> 님이 파산했습니다.
-          const msg = createSystemMessage(`${player.name} 님이 파산했습니다.`);
+          const msg = createSystemMessage(`${player.name} 님이 파산했습니다.`, now);
 
           transaction.update(roomRef, {
               ownership: newOwnership,
@@ -593,7 +610,7 @@ export const GameService = {
                   type: 'BANKRUPT',
                   message: '파산 선언! 게임에서 탈락합니다.',
                   subjectId: playerId,
-                  timestamp: Date.now()
+                  timestamp: now
               },
               chat: [...(roomData.chat || []), msg]
           });
@@ -619,16 +636,17 @@ export const GameService = {
               updateData[`players.${playerId}.balance`] = player.balance + result.balanceChange;
           }
           
+          const now = Date.now();
           const action: GameAction = {
               type: 'GOLD_KEY',
               message: `황금열쇠: ${key.title}`, 
               subjectId: playerId,
               amount: result.balanceChange,
-              timestamp: Date.now()
+              timestamp: now
           };
 
           // Request: <닉네임> 님이 <황금열쇠 내용>으로 인해 <결과>
-          const msg = createSystemMessage(`${player.name} 님이 황금열쇠 [${key.title}] 효과로 ${result.message.replace(' 수령', '').replace(' 납부', '')} 결과를 얻었습니다.`);
+          const msg = createSystemMessage(`${player.name} 님이 황금열쇠 [${key.title}] 효과로 ${result.message.replace(' 수령', '').replace(' 납부', '')} 결과를 얻었습니다.`, now);
 
           updateData.lastAction = action;
           updateData.chat = [...(roomData.chat || []), msg];
@@ -647,10 +665,12 @@ export const GameService = {
           if (!roomDoc.exists()) throw "Room not found";
           const roomData = roomDoc.data() as GameRoom;
 
+          const now = Date.now();
+
           // Check Win Condition
           const activePlayers = roomData.playerOrder.filter(uid => !roomData.players[uid].isBankrupt);
           if (activePlayers.length === 1 && roomData.status === 'PLAYING') {
-              const winMsg = createSystemMessage(`${roomData.players[activePlayers[0]].name} 님이 최종 승리하였습니다!`);
+              const winMsg = createSystemMessage(`${roomData.players[activePlayers[0]].name} 님이 최종 승리하였습니다!`, now);
               transaction.update(roomRef, {
                   status: 'FINISHED',
                   winnerId: activePlayers[0],
@@ -658,7 +678,7 @@ export const GameService = {
                       type: 'WIN',
                       message: '게임 종료! 승자가 결정되었습니다.',
                       subjectId: activePlayers[0],
-                      timestamp: Date.now()
+                      timestamp: now
                   },
                   chat: [...(roomData.chat || []), winMsg]
               });
@@ -681,12 +701,12 @@ export const GameService = {
               currentTurnIndex: nextIdx,
               [`players.${currentPlayerId}.isTurn`]: false,
               [`players.${nextPlayerId}.isTurn`]: true,
-              turnDeadline: Date.now() + TURN_DURATION_MS,
+              turnDeadline: now + TURN_DURATION_MS,
               lastAction: {
                   type: 'START_TURN',
                   message: '턴 종료',
                   subjectId: nextPlayerId,
-                  timestamp: Date.now()
+                  timestamp: now
               }
           });
       });

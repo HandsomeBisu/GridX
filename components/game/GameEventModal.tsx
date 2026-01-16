@@ -58,10 +58,12 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
     if (isOpen) {
       if (type === 'PAY_TOLL' || type === 'SELL_LAND' || type === 'WELFARE_PAY') {
           playSound('ERROR'); 
-      } else if (type === 'BUY_LAND' || type === 'WELFARE_RECEIVE') {
-          playSound('TURN_START');
+      } else if (type === 'BUY_LAND') {
+          playSound('POPUP'); // UPDATED: Specific popup sound for buying/building
+      } else if (type === 'WELFARE_RECEIVE') {
+          playSound('GET_MONEY'); // UPDATED: Get money sound
       } else if (type === 'GOLD_KEY' || type === 'SPACE_TRAVEL') {
-          playSound('TURN_START'); 
+          playSound('POPUP'); 
       } else {
           playSound('CLICK');
       }

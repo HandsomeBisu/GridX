@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Skull, Crown, HandCoins, RotateCw } from 'lucide-react';
+import { Skull, Crown, HandCoins, RotateCw, Bell } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { GameEventModal, ModalType } from '../game/GameEventModal';
 import { GameRulesModal } from '../ui/GameRulesModal'; // Import Rules Modal
@@ -56,6 +56,9 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
   const [showRules, setShowRules] = useState(false); // Rules Modal State
   const [showTurnEffect, setShowTurnEffect] = useState(false);
   
+  // New System Message Popup State
+  const [systemNotification, setSystemNotification] = useState<{ text: string, colorClass: string, icon?: React.ReactNode } | null>(null);
+  
   // Refs
   const prevPlayersRef = useRef<Record<string, Player>>({});
   const processedActionIdRef = useRef<number>(0);
@@ -91,15 +94,22 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
       const unsubscribe = GameService.subscribeToRoom(roomId, (data) => {
           if (data) {
               setRoomData(data);
-              // Sync Dice Values initially or when changed, BUT wait for animation if we triggered it
-              // If we are NOT animating, sync immediately (e.g., page refresh)
               if (!isAnimating) {
                    setShownDiceValues(data.lastDiceValues || [1, 1]);
               }
           } else {
-              playSound('ERROR');
-              alert("호스트가 방을 나갔거나 게임이 종료되었습니다.");
-              onQuit();
+              // Graceful disconnect handling
+              // If we were in FINISHED state, we allow roomData to persist so winner screen shows
+              // otherwise, we quit.
+              setRoomData((prev) => {
+                  if (prev && prev.status === 'FINISHED') return prev;
+                  
+                  // Only alert and quit if we were playing or waiting and room vanished
+                  playSound('ERROR');
+                  alert("호스트가 방을 나갔거나 게임이 종료되었습니다.");
+                  onQuit();
+                  return null;
+              });
           }
       });
       return () => unsubscribe();
@@ -109,16 +119,16 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
   useEffect(() => {
       if (!roomData || !currentUser || !roomId) return;
       
-      // STOP TIMER Logic: If modal is open, don't check for timeout
-      if (modalState.isOpen) return;
+      // FIXED: Do not force end turn if modal is open OR if we are processing an event (like Golden Key fetch)
+      if (modalState.isOpen || isProcessing) return;
 
       const myPlayer = roomData.players[currentUser.uid];
       if (myPlayer?.isTurn && roomData.status === 'PLAYING' && roomData.turnDeadline) {
           const checkTimer = setInterval(() => {
-              if (Date.now() > roomData.turnDeadline! + 2000) { // Buffer 2s to avoid racing with server
-                  // Force pass locally if needed or just wait for another player to trigger it
-                  // Ideally, ANY client can trigger forceEndTurn for the current player if expired.
-                  // We'll let the current player trigger it themselves first.
+              // Double check processing state inside interval to be safe
+              if (modalState.isOpen || isProcessing) return;
+              
+              if (Date.now() > roomData.turnDeadline! + 2000) { 
                   if (myPlayer.isTurn) {
                       GameService.forceEndTurn(roomId, currentUser.uid).catch(console.error);
                   }
@@ -126,23 +136,81 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
           }, 1000);
           return () => clearInterval(checkTimer);
       }
-  }, [roomData, currentUser, roomId, modalState.isOpen]);
+  }, [roomData, currentUser, roomId, modalState.isOpen, isProcessing]);
 
-  // 4. Last Action Processing (Logs, Sounds, Floating Text)
+  // 4. Last Action Processing (Logs, Sounds, Floating Text, System Popup)
   useEffect(() => {
      if (roomData?.lastAction && currentUser) {
          const action = roomData.lastAction;
          
-         // Prevent double processing same timestamp action
          if (action.timestamp <= processedActionIdRef.current) return;
          processedActionIdRef.current = action.timestamp;
 
-         // -- Floating Text Logic --
          const subjectPlayer = roomData.players[action.subjectId];
          const targetPlayer = action.targetId ? roomData.players[action.targetId] : null;
 
+         // --- SYSTEM POPUP LOGIC ---
+         let popupColor = "border-gray-500 text-gray-200 shadow-gray-500/50";
+         let popupIcon = <Bell size={18} />;
+
+         // Determine color based on action type
+         if (['BUY'].includes(action.type)) {
+             popupColor = "border-gold-500 text-gold-300 shadow-gold-500/50";
+             popupIcon = <Crown size={18} />;
+         } else if (['PAY_TOLL', 'BANKRUPT', 'ESCAPE_FAIL', 'TIMEOUT'].includes(action.type)) {
+             popupColor = "border-red-500 text-red-300 shadow-red-500/50";
+             popupIcon = <Skull size={18} />;
+         } else if (['SELL', 'WELFARE', 'ESCAPE_SUCCESS'].includes(action.type)) {
+             // Check if paying or receiving welfare
+             const isPay = action.type === 'WELFARE' && action.message.includes('납부');
+             if (isPay) {
+                popupColor = "border-red-500 text-red-300 shadow-red-500/50";
+             } else {
+                popupColor = "border-green-500 text-green-300 shadow-green-500/50";
+                popupIcon = <HandCoins size={18} />;
+             }
+         } else if (['GOLD_KEY', 'SPACE_TRAVEL', 'TELEPORT'].includes(action.type)) {
+             popupColor = "border-purple-500 text-purple-300 shadow-purple-500/50";
+         } else if (['MOVE', 'START_TURN'].includes(action.type)) {
+             popupColor = "border-blue-500 text-blue-300 shadow-blue-500/50";
+         } else if (['WIN'].includes(action.type)) {
+             popupColor = "border-gold-500 text-gold-100 bg-gold-900 shadow-gold-500";
+             popupIcon = <Crown size={24} />;
+         }
+
+         // Construct Message (Reuse action.message or chat log logic)
+         // Chat logic generates a detailed sentence. Action message is short.
+         // Let's use the Chat Log's last message if it matches this timestamp? 
+         // Simpler: Just use action.message + Subject Name for context
+         let fullText = "";
+         if (roomData.chat && roomData.chat.length > 0) {
+             const lastChat = roomData.chat[roomData.chat.length - 1];
+             // If chat is fresh (within 100ms) and system type, use it
+             if (lastChat.type === 'SYSTEM' && Math.abs(lastChat.timestamp - action.timestamp) < 500) {
+                 fullText = lastChat.text;
+             }
+         }
+         
+         if (!fullText) {
+             fullText = `${subjectPlayer?.name || 'Unknown'}: ${action.message}`;
+         }
+
+         setSystemNotification({ text: fullText, colorClass: popupColor, icon: popupIcon });
+         
+         // Sound for Notification: Play NOTICE only if it's not my action (to alert me) OR if it's a critical event
+         // Actually, let's play NOTICE for significant events from others.
+         if (action.subjectId !== currentUser.uid && ['BUY', 'PAY_TOLL', 'GOLD_KEY', 'WELFARE', 'TELEPORT', 'WIN', 'BANKRUPT'].includes(action.type)) {
+             playSound('NOTICE');
+         }
+
+         // Auto hide popup
+         setTimeout(() => {
+             setSystemNotification(null);
+         }, 4000);
+
+
+         // --- FLOATING TEXT LOGIC ---
          if (action.amount && action.amount > 0) {
-             
              if (action.type === 'PAY_TOLL') {
                  if (subjectPlayer) spawnFloatingText(subjectPlayer.position, `- ${formatPrice(action.amount)}`, '#EF4444');
                  if (targetPlayer) spawnFloatingText(targetPlayer.position, `+ ${formatPrice(action.amount)}`, '#10B981');
@@ -156,36 +224,39 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
              }
          }
          
-         // GOLD KEY SPECIAL
          if (action.type === 'GOLD_KEY' && action.amount) {
              const color = action.amount > 0 ? '#10B981' : '#EF4444';
-             const sign = action.amount > 0 ? '+' : ''; // negative has sign
+             const sign = action.amount > 0 ? '+' : ''; 
              if (subjectPlayer) spawnFloatingText(subjectPlayer.position, `${sign} ${formatPrice(action.amount)}`, color);
          }
 
-         // -- Toast / Sound Logic --
+         // -- SPECIFIC SOUNDS --
+         // Money Received (Toll, Welfare, Salary)
          if (action.type === 'PAY_TOLL' && action.targetId === currentUser.uid) {
-             playSound('BUILD');
+             playSound('GET_MONEY');
              const payerName = roomData.players[action.subjectId]?.name || '알 수 없음';
              setReceivedToll({ from: payerName, amount: action.amount || 0 });
              const timer = setTimeout(() => { setReceivedToll(null); }, 4000);
          }
+
+         // Bankrupt
+         if (action.type === 'BANKRUPT') {
+             playSound('BANKRUPT');
+         }
          
+         // Salary
          if (action.type === 'MOVE' && action.subjectId === currentUser.uid && action.message.includes('월급')) {
-            playSound('BUILD');
+            playSound('GET_MONEY');
             setSalaryNotification(true);
             setTimeout(() => { setSalaryNotification(false); }, 3000);
          }
          
          if (action.type === 'ESCAPE_FAIL' && action.subjectId === currentUser.uid) {
-             // Island Stay Logic: Show dice roll, then end turn
-             // We block processing to prevent double clicks
              setIsProcessing(true);
              playSound('ERROR');
              
              spawnFloatingText(roomData.players[currentUser.uid].position, action.message, '#EF4444');
 
-             // Trigger Dice Animation for feedback
              setDiceRolling(true);
              playSound('DICE_ROLL');
 
@@ -208,13 +279,7 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
   }, [roomData?.lastAction, currentUser]);
 
   const spawnFloatingText = (posIdx: number, text: string, color: string) => {
-      // Calculate % position based on grid index
       const { row, col } = getGridPosition(posIdx);
-      // Convert grid row/col (1-11) to percentage (0-100)
-      // Grid is 11x11. 
-      // col 1 -> 0%, col 11 -> 100%
-      // But we want center of cell. 
-      // cell width is roughly 9%. 
       const x = ((col - 1) * 9) + 4.5; 
       const y = ((row - 1) * 9) + 4.5;
 
@@ -224,8 +289,6 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
       };
       
       setFloatingTexts(prev => [...prev, newText]);
-      
-      // Cleanup
       setTimeout(() => {
           setFloatingTexts(prev => prev.filter(t => t.id !== newText.id));
       }, 2000);
@@ -263,20 +326,16 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
           setVisualPositions(newVisualPositions);
       }
 
-      // Check if animation needed
       if (playersToAnimate.length > 0 && !isAnimating) {
           animateMultiplePlayers(playersToAnimate);
       } 
-      // Removed incorrect START_TURN arrival triggering logic to fix bug where next player gets stuck at Start
       
   }, [roomData, currentUser]); 
 
   const animateMultiplePlayers = async (moves: { uid: string, start: number, end: number }[]) => {
       setIsAnimating(true);
-      // Ensure we clear processing state if we start animating a move
       setIsProcessing(false); 
       
-      // Dice Animation Logic
       const isTeleport = roomData?.lastAction?.type === 'TELEPORT';
       const isStartTurn = roomData?.lastAction?.type === 'START_TURN';
 
@@ -284,13 +343,11 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
            setDiceRolling(true);
            playSound('DICE_ROLL');
            
-           // Rolling duration
            await new Promise(resolve => setTimeout(resolve, 800));
            
            setDiceRolling(false);
            setShownDiceValues(roomData.lastDiceValues);
            
-           // Pause to let user see result
            await new Promise(resolve => setTimeout(resolve, 500)); 
       }
 
@@ -332,13 +389,11 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
   const isSpaceTravelMode = isMyTurn && myPlayer?.position === 10 && !isAnimating && !modalState.isOpen;
   const isStuckOnIsland = isMyTurn && (myPlayer?.islandTurns || 0) > 0;
 
-  // Turn Notification Effect
   useEffect(() => {
     if (isMyTurn && !prevIsMyTurnRef.current) {
       playSound('TURN_START');
       setShowTurnEffect(true);
       setTimeout(() => setShowTurnEffect(false), 2000);
-      // Reset processing flag on new turn to be safe
       setIsProcessing(false);
     }
     prevIsMyTurnRef.current = isMyTurn;
@@ -391,16 +446,12 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
     if (isAnimating || isProcessing || modalState.isOpen || !isMyTurn || !roomId || !currentUser) return;
     if (isSpaceTravelMode) return;
     
-    // Set processing TRUE immediately to block double clicks during network request
     setIsProcessing(true);
 
     try {
         await GameService.rollDice(roomId, currentUser.uid);
-        // Note: We DO NOT set isProcessing(false) here. 
-        // It will be reset by either animateMultiplePlayers (normal move) or the ESCAPE_FAIL handler (island).
     } catch (e) {
         console.error(e);
-        // Only reset if error occurred preventing any action
         setIsProcessing(false);
     }
   };
@@ -410,10 +461,6 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
       setIsProcessing(true);
       try {
           await GameService.escapeIsland(roomId, currentUser.uid);
-          // Don't reset isProcessing here either, let the action listener handle it or UI update
-          // Actually escapeIsland updates state immediately, user is free.
-          // The UI will re-render, button becomes available. 
-          // We can reset here because no animation triggers automatically for simple escape pay.
           setIsProcessing(false);
       } catch (e: any) {
           alert(e);
@@ -434,33 +481,29 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
     const cell = BOARD_DATA.find(c => c.id === pos);
     if (!cell) { handleEndTurn(); return; }
 
-    // If I'm stuck, I shouldn't trigger events (this protects against glitches)
     if ((myPlayer?.islandTurns || 0) > 0) return;
 
-    // Special Case: Golden Key
     if (cell.type === 'GOLD_KEY' && roomId && currentUser) {
-        setIsProcessing(true); // BLOCK interactions
+        setIsProcessing(true); 
         try {
-            // Wait slightly for animation to settle visually, but block controls
             await new Promise(resolve => setTimeout(resolve, 500));
             const data = await GameService.applyGoldenKey(roomId, currentUser.uid);
-            setIsProcessing(false); // UNBLOCK when modal opens
+            setIsProcessing(false); 
             setModalState({ isOpen: true, type: 'GOLD_KEY', cellData: cell, goldenKeyData: data });
         } catch (e) { 
             console.error(e); 
             setIsProcessing(false);
+            // If error occurs, we should probably check if turn needs ending, but safely
             handleEndTurn(); 
         }
         return;
     }
 
-    // Welfare Pay
     if (cell.id === 30 && roomId && currentUser) {
         setModalState({ isOpen: true, type: 'WELFARE_PAY', cellData: cell });
         return;
     }
 
-    // Welfare Receive
     if (cell.id === 38 && roomId && currentUser) {
         setIsProcessing(true);
         try {
@@ -475,7 +518,6 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
         return;
     }
 
-    // Space Travel
     if (cell.id === 10 && roomId && currentUser) {
         setModalState({ isOpen: true, type: 'SPACE_TRAVEL', cellData: cell });
         return;
@@ -539,7 +581,7 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
         try { await GameService.payWelfareFund(roomId, currentUser.uid, 150000); playSound('BUILD'); } catch (e) {}
     }
 
-    if (modalState.type === 'WELFARE_RECEIVE') { playSound('BUILD'); }
+    if (modalState.type === 'WELFARE_RECEIVE') { playSound('GET_MONEY'); }
     
     setModalState(prev => ({ ...prev, isOpen: false }));
     handleEndTurn();
@@ -548,15 +590,11 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
   const handleSellAssets = async (cellIds: number[]) => {
       if (!roomId || !currentUser) return;
       try {
-          // Process multiple sells
           await Promise.all(cellIds.map(id => GameService.sellLand(roomId, currentUser.uid, id)));
           playSound('BUILD'); 
           
           setModalState(prev => ({ ...prev, isOpen: false }));
           
-          // Re-trigger arrival to check if we can pay toll now (re-open PAY_TOLL if enough funds)
-          // Or just stay in SELL_LAND if not enough? 
-          // Current logic: close modal -> handleArrival -> re-evaluate.
           setTimeout(() => {
               const currentPos = roomData?.players[currentUser.uid].position;
               if (currentPos !== undefined) handleArrival(currentPos);
@@ -587,7 +625,7 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
       const winner = roomData.players[roomData.winnerId];
       const isMe = currentUser?.uid === roomData.winnerId;
       return (
-          <div className="flex flex-col items-center justify-center h-full bg-black relative overflow-hidden">
+          <div className="flex flex-col items-center justify-center h-full bg-black relative overflow-hidden z-[200]">
                <div className="absolute inset-0 bg-gold-500/10 animate-pulse-slow"></div>
                <div className="z-10 text-center p-8 bg-luxury-panel border-2 border-gold-500 rounded-lg shadow-2xl animate-fade-in-up">
                    <Crown size={80} className="text-gold-500 mx-auto mb-6 animate-bounce" />
@@ -595,9 +633,10 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
                        {isMe ? "VICTORY!" : "GAME OVER"}
                    </h1>
                    <p className="text-gold-400 text-xl font-serif mb-8 uppercase tracking-widest">
-                       {isMe ? "최후의 승자가 되었습니다!" : `${winner.name} 님의 승리입니다.`}
+                       {isMe ? "최후의 승자가 되었습니다!" : `${winner?.name || 'Unknown'} 님의 승리입니다.`}
                    </p>
-                   <Button variant="primary" size="lg" onClick={onQuit}>로비로 돌아가기</Button>
+                   {/* Explicitly call handleLeaveGame to ensure room deletion if needed */}
+                   <Button variant="primary" size="lg" onClick={handleLeaveGame}>로비로 돌아가기</Button>
                </div>
           </div>
       );
@@ -625,6 +664,18 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
 
       {/* Rules Modal */}
       <GameRulesModal isOpen={showRules} onClose={() => setShowRules(false)} />
+
+      {/* SYSTEM MESSAGE POPUP (NEW) */}
+      {systemNotification && (
+          <div className={`fixed top-[15%] left-1/2 -translate-x-1/2 z-[150] w-[80%] max-w-2xl bg-black/80 backdrop-blur-md border px-6 py-4 rounded-lg shadow-[0_0_30px_rgba(0,0,0,0.5)] flex items-center gap-4 animate-fade-in-up ${systemNotification.colorClass}`}>
+              <div className="p-2 bg-white/5 rounded-full border border-white/10 shrink-0">
+                  {systemNotification.icon}
+              </div>
+              <div className="flex-1 font-bold text-sm md:text-base leading-snug">
+                  {systemNotification.text}
+              </div>
+          </div>
+      )}
 
       <GameEventModal 
         isOpen={modalState.isOpen}
