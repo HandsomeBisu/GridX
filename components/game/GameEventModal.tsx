@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Building2, MapPin, Check, Home, Hotel, Building, Star, Plane, HandCoins, AlertOctagon, Key, DollarSign, RefreshCw, XCircle, Rocket, Gift, MoveRight, ArrowRight, Coins, Calculator } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { BoardCell, BuildingState, GoldenKey } from '../../types';
@@ -14,7 +14,7 @@ interface GameEventModalProps {
   onConfirm: (selectedBuildings: BuildingState, totalCost: number) => void;
   onCancel: () => void;
   onSell?: (cellIds: number[]) => void; 
-  onDeclareBankruptcy?: () => void; // New Prop
+  onDeclareBankruptcy?: () => void;
   playerBalance: number;
   tollAmount?: number;
   ownedLands?: BoardCell[]; 
@@ -53,19 +53,23 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
   
   // Sell Land State
   const [selectedSellIds, setSelectedSellIds] = useState<number[]>([]);
+  const hasPlayedSoundRef = useRef(false);
 
   useEffect(() => {
     if (isOpen) {
-      if (type === 'PAY_TOLL' || type === 'SELL_LAND' || type === 'WELFARE_PAY') {
-          playSound('ERROR'); 
-      } else if (type === 'BUY_LAND') {
-          playSound('POPUP'); // UPDATED: Specific popup sound for buying/building
-      } else if (type === 'WELFARE_RECEIVE') {
-          playSound('GET_MONEY'); // UPDATED: Get money sound
-      } else if (type === 'GOLD_KEY' || type === 'SPACE_TRAVEL') {
-          playSound('POPUP'); 
-      } else {
-          playSound('CLICK');
+      if (!hasPlayedSoundRef.current) {
+          if (type === 'PAY_TOLL' || type === 'SELL_LAND' || type === 'WELFARE_PAY') {
+              playSound('ERROR'); 
+          } else if (type === 'BUY_LAND') {
+              playSound('POPUP'); 
+          } else if (type === 'WELFARE_RECEIVE') {
+              // Money sound handled in parent logic for receiver
+          } else if (type === 'GOLD_KEY' || type === 'SPACE_TRAVEL') {
+              playSound('POPUP'); 
+          } else {
+              playSound('CLICK');
+          }
+          hasPlayedSoundRef.current = true;
       }
 
       setSelection({
@@ -74,8 +78,10 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
         hasHotel: currentBuildings.hasHotel,
       });
       setSelectedSellIds([]);
+    } else {
+        hasPlayedSoundRef.current = false;
     }
-  }, [isOpen, type, currentBuildings]);
+  }, [isOpen, type]); // Removed currentBuildings dependency to prevent double sound
 
   if (!isOpen) return null;
 
@@ -139,13 +145,25 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
       const remainingAfterSell = (playerBalance + totalSelectedSellValue) - tollAmount;
       const isEnough = remainingAfterSell >= 0;
       
-      const allSelected = selectedSellIds.length === ownedLands.length;
-      const isBankruptCondition = allSelected && !isEnough;
+      // Calculate Total Potential Asset Value (Cash + Sell Value of All Lands)
+      const totalAssetValue = playerBalance + ownedLands.reduce((sum, land) => sum + (land.price || 0), 0);
+      const isBankrupt = totalAssetValue < tollAmount;
 
       const toggleSelection = (id: number) => {
           setSelectedSellIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
           playSound('CLICK');
       };
+
+      // Auto Bankruptcy Effect if impossible to pay
+      useEffect(() => {
+          if (isBankrupt && onDeclareBankruptcy) {
+               const timer = setTimeout(() => {
+                   onDeclareBankruptcy();
+                   onCancel();
+               }, 3000);
+               return () => clearTimeout(timer);
+          }
+      }, [isBankrupt]);
 
       return (
           <div className="flex flex-col h-full max-h-[60vh]">
@@ -156,7 +174,7 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
               
               <div className="flex-1 overflow-y-auto custom-scrollbar space-y-2 mb-4 pr-1">
                   {ownedLands.length === 0 ? (
-                      <div className="text-center text-gray-500 py-10">매각할 수 있는 부동산이 없습니다. (파산 위기)</div>
+                      <div className="text-center text-gray-500 py-10">매각할 수 있는 부동산이 없습니다.</div>
                   ) : (
                       ownedLands.map(land => {
                           const isSelected = selectedSellIds.includes(land.id);
@@ -204,19 +222,10 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
                       </span>
                   </div>
 
-                  {isBankruptCondition || (ownedLands.length === 0 && !isEnough) ? (
-                      <Button 
-                        variant="primary"
-                        className="w-full bg-red-800 border-red-600 hover:bg-red-700 animate-pulse"
-                        onClick={() => {
-                            if (window.confirm("모든 자산을 매각해도 파산을 면할 수 없습니다. 파산을 선언하시겠습니까?")) {
-                                onDeclareBankruptcy && onDeclareBankruptcy();
-                                onCancel(); // Close modal
-                            }
-                        }}
-                      >
-                         <AlertOctagon size={16} className="mr-2"/> 파산 선언 (지불 불가)
-                      </Button>
+                  {isBankrupt ? (
+                      <div className="w-full py-3 bg-red-900/80 border border-red-600 rounded text-center text-red-200 animate-pulse font-bold">
+                          ⚠️ 자산 부족으로 곧 파산 처리됩니다...
+                      </div>
                   ) : (
                       <Button 
                         variant="primary" 
@@ -224,7 +233,7 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
                         disabled={!isEnough}
                         onClick={() => onSell && onSell(selectedSellIds)}
                       >
-                          {isEnough ? `${selectedSellIds.length}개 매각 및 지불` : '금액이 부족합니다'}
+                          {isEnough ? `매각 후 즉시 지불 (거스름돈 ${formatMoney(remainingAfterSell)})` : '금액이 부족합니다'}
                       </Button>
                   )}
               </div>
@@ -237,7 +246,6 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
       const result = goldenKeyData?.result;
       const amount = result?.balanceChange;
       const isMove = data?.type === 'MOVE';
-      const isMoney = data?.type === 'MONEY';
 
       return (
           <div className="text-center py-6 space-y-6">
@@ -268,15 +276,9 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
     const basePrice = cellData.price || 0;
     const isOwned = cellData.owner !== null && cellData.owner !== undefined;
     
-    // UPDATED LOGIC: 
-    // Unowned -> Can only buy Land.
-    // Owned -> Can select ANY single building that isn't built yet.
-    
     let cost = 0;
     let actionLabel = '건설';
     
-    // Determine what is currently selected (diff between selection and currentBuildings)
-    // We only allow 1 new selection.
     let selectedUpgrade: keyof BuildingState | null = null;
     if (selection.hasVilla && !currentBuildings.hasVilla) selectedUpgrade = 'hasVilla';
     else if (selection.hasBuilding && !currentBuildings.hasBuilding) selectedUpgrade = 'hasBuilding';
@@ -302,32 +304,23 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
     const hasSelection = !isOwned || !!selectedUpgrade; 
     const isMaxed = isOwned && currentBuildings.hasVilla && currentBuildings.hasBuilding && currentBuildings.hasHotel && !isSpecialLocation;
 
-    // Projected Toll Calculation
     let projectedToll = 0;
     if (isSpecialLocation) {
         projectedToll = cellData.toll || 0;
     } else {
-        // Base land toll
         projectedToll = basePrice * RATIOS.LAND_TOLL;
-        
-        // Use 'selection' state to calculate projected toll (includes current + new)
         if (selection.hasVilla) projectedToll += basePrice * RATIOS.VILLA_TOLL;
         if (selection.hasBuilding) projectedToll += basePrice * RATIOS.BUILD_TOLL;
         if (selection.hasHotel) projectedToll += basePrice * RATIOS.HOTEL_TOLL;
     }
 
     const toggleUpgrade = (key: keyof BuildingState) => {
-        // If already built, ignore
         if (currentBuildings[key]) return;
-        
-        // If clicking the currently selected upgrade, deselect it (revert to current)
         if (selection[key] && !currentBuildings[key]) {
             setSelection({ ...currentBuildings });
             playSound('CLICK');
             return;
         }
-
-        // Select new upgrade (and Deselect any other new upgrade by resetting to current first)
         const newSelection = { ...currentBuildings };
         newSelection[key] = true;
         setSelection(newSelection);
@@ -446,7 +439,7 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
                 className={`w-full ${playerBalance < tollAmount ? 'bg-gray-600 border-gray-500' : 'bg-red-600 border-red-500 hover:bg-red-500'} text-white`}
                 onClick={() => {
                     if (playerBalance < tollAmount) {
-                       // Logic handled via parent switch to SELL_LAND
+                       // Handled via parent logic -> switches to SELL_LAND or Auto Sell Logic
                     } else {
                         onConfirm(selection, 0);
                     }
@@ -462,9 +455,9 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
 
   const renderInfoContent = () => (
      <div className="py-8 text-center text-gray-300">
-        <p className="text-xl font-serif mb-2 text-white">{cellData?.name}</p>
+        <p className="text-2xl font-serif mb-2 text-white">{cellData?.name}</p>
         <p className="text-sm text-gray-500 px-8">특별한 이벤트가 없는 평화로운 지역입니다.</p>
-        <div className="mt-6">
+        <div className="mt-8">
             <Button variant="secondary" className="w-full" onClick={onCancel} icon={<Check size={16}/>}>
                 확인
             </Button>
@@ -474,7 +467,7 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
 
   return (
     <div className="absolute inset-0 z-[100] flex items-center justify-center p-4 bg-black/80 backdrop-blur-md animate-fade-in-up">
-      <div className="relative w-full max-w-lg bg-luxury-panel border border-gold-600 rounded-lg shadow-[0_0_60px_rgba(245,132,26,0.3)] overflow-hidden flex flex-col max-h-[90vh]">
+      <div className={`relative w-full ${type === 'INFO' ? 'max-w-md' : 'max-w-lg'} bg-luxury-panel border border-gold-600 rounded-lg shadow-[0_0_60px_rgba(245,132,26,0.3)] overflow-hidden flex flex-col max-h-[90vh]`}>
         
         {/* Header - Always show for context, including BUY_LAND now */}
         <div className="h-24 relative overflow-hidden bg-black shrink-0">

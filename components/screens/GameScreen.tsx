@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Skull, Crown, HandCoins, RotateCw, Bell } from 'lucide-react';
+import { Skull, Crown, HandCoins, RotateCw, Bell, Eye } from 'lucide-react';
 import { Button } from '../ui/Button';
 import { GameEventModal, ModalType } from '../game/GameEventModal';
 import { GameRulesModal } from '../ui/GameRulesModal'; // Import Rules Modal
@@ -180,8 +180,6 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
 
          // Construct Message (Reuse action.message or chat log logic)
          // Chat logic generates a detailed sentence. Action message is short.
-         // Let's use the Chat Log's last message if it matches this timestamp? 
-         // Simpler: Just use action.message + Subject Name for context
          let fullText = "";
          if (roomData.chat && roomData.chat.length > 0) {
              const lastChat = roomData.chat[roomData.chat.length - 1];
@@ -198,7 +196,6 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
          setSystemNotification({ text: fullText, colorClass: popupColor, icon: popupIcon });
          
          // Sound for Notification: Play NOTICE only if it's not my action (to alert me) OR if it's a critical event
-         // Actually, let's play NOTICE for significant events from others.
          if (action.subjectId !== currentUser.uid && ['BUY', 'PAY_TOLL', 'GOLD_KEY', 'WELFARE', 'TELEPORT', 'WIN', 'BANKRUPT'].includes(action.type)) {
              playSound('NOTICE');
          }
@@ -432,13 +429,13 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
 
   const handleDeclareBankruptcy = async () => {
       if (!roomId || !currentUser) return;
-      if (window.confirm("정말 파산 선언을 하시겠습니까? 게임에서 즉시 탈락합니다.")) {
-          try {
-              await GameService.declareBankruptcy(roomId, currentUser.uid);
-              onQuit();
-          } catch (e) {
-              console.error(e);
-          }
+      // Immediate bankruptcy execution
+      try {
+          await GameService.declareBankruptcy(roomId, currentUser.uid);
+          setModalState(prev => ({ ...prev, isOpen: false }));
+          // Note: Spectator mode is handled by UI state, no need to Quit app
+      } catch (e) {
+          console.error(e);
       }
   };
 
@@ -486,14 +483,17 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
     if (cell.type === 'GOLD_KEY' && roomId && currentUser) {
         setIsProcessing(true); 
         try {
-            await new Promise(resolve => setTimeout(resolve, 500));
+            await new Promise(resolve => setTimeout(resolve, 800)); // Ensure buffer time
             const data = await GameService.applyGoldenKey(roomId, currentUser.uid);
+            
+            // Wait a tick to ensure data is synced before opening modal
+            await new Promise(resolve => setTimeout(resolve, 200));
+            
             setIsProcessing(false); 
             setModalState({ isOpen: true, type: 'GOLD_KEY', cellData: cell, goldenKeyData: data });
         } catch (e) { 
             console.error(e); 
             setIsProcessing(false);
-            // If error occurs, we should probably check if turn needs ending, but safely
             handleEndTurn(); 
         }
         return;
@@ -593,6 +593,30 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
           await Promise.all(cellIds.map(id => GameService.sellLand(roomId, currentUser.uid, id)));
           playSound('BUILD'); 
           
+          // Check if user has enough balance now to pay toll
+          if (modalState.type === 'SELL_LAND' && modalState.tollAmount && modalState.cellData?.owner) {
+             // We need fresh data ideally, but logic dictates we just sold X amount.
+             // Let's assume the component will unmount/remount or we just chain the logic blindly if we know it's enough
+             // However, to be safe, we close modal and let the user click pay? 
+             // Request was: "Automatically pay if sufficient".
+             
+             // We can calculate approximate balance
+             const soldValue = myOwnedCells.filter(c => cellIds.includes(c.id)).reduce((acc, c) => acc + (c.price || 0), 0); // Approx
+             // A better way is to wait for update, but we want speed.
+             // Actually, GameEventModal handles the "Sufficient" check. If we are here, it means we selected enough.
+             
+             try {
+                // Execute Pay Toll Immediately
+                await GameService.payToll(roomId, currentUser.uid, modalState.cellData.owner, modalState.tollAmount);
+                playSound('PAY_TOLL');
+                setModalState(prev => ({ ...prev, isOpen: false }));
+                handleEndTurn();
+                return;
+             } catch (e) {
+                 console.error("Auto Pay Failed", e);
+             }
+          }
+
           setModalState(prev => ({ ...prev, isOpen: false }));
           
           setTimeout(() => {
@@ -621,6 +645,7 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
   if (!roomData) return <div className="flex items-center justify-center h-full text-gold-500 font-mono animate-pulse">CONNECTING TO GRID...</div>;
 
   // --- WINNER SCREEN ---
+  // Only show full screen if game is completely finished
   if (roomData.status === 'FINISHED' && roomData.winnerId) {
       const winner = roomData.players[roomData.winnerId];
       const isMe = currentUser?.uid === roomData.winnerId;
@@ -642,21 +667,19 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
       );
   }
 
-  // --- SPECTATOR / BANKRUPT SCREEN ---
-  if (myPlayer?.isBankrupt) {
-      return (
-        <div className="flex flex-col items-center justify-center h-full bg-black/90 relative z-50">
-             <Skull size={64} className="text-gray-500 mb-4" />
-             <h2 className="text-3xl font-bold text-red-500 mb-2">YOU ARE BANKRUPT</h2>
-             <p className="text-gray-400 mb-6">파산하여 게임에서 탈락했습니다. 관전 모드로 전환됩니다.</p>
-             <Button variant="secondary" onClick={onQuit}>나가기</Button>
-        </div>
-      );
-  }
+  // --- SPECTATOR MODE (Removed Full Screen Bankrupt Overlay) ---
+  const isSpectating = myPlayer?.isBankrupt;
 
   return (
     <div className="flex flex-col h-full w-full bg-[#050505] overflow-hidden relative">
       
+      {/* Spectator Indicator */}
+      {isSpectating && (
+          <div className="absolute top-0 left-0 right-0 z-[190] bg-red-900/80 text-white text-center py-1 text-xs font-bold tracking-widest border-b border-red-500 animate-pulse">
+              <Eye size={12} className="inline mr-2"/> YOU ARE IN SPECTATOR MODE
+          </div>
+      )}
+
       {/* Turn Start Flash Effect */}
       {showTurnEffect && (
         <div className="fixed inset-0 z-[200] pointer-events-none shadow-[inset_0_0_100px_rgba(245,132,26,0.5)] animate-flash-twice" />
@@ -665,7 +688,7 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
       {/* Rules Modal */}
       <GameRulesModal isOpen={showRules} onClose={() => setShowRules(false)} />
 
-      {/* SYSTEM MESSAGE POPUP (NEW) */}
+      {/* SYSTEM MESSAGE POPUP */}
       {systemNotification && (
           <div className={`fixed top-[15%] left-1/2 -translate-x-1/2 z-[150] w-[80%] max-w-2xl bg-black/80 backdrop-blur-md border px-6 py-4 rounded-lg shadow-[0_0_30px_rgba(0,0,0,0.5)] flex items-center gap-4 animate-fade-in-up ${systemNotification.colorClass}`}>
               <div className="p-2 bg-white/5 rounded-full border border-white/10 shrink-0">
