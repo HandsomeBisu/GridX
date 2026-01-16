@@ -140,7 +140,21 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
       const allSelected = selectedSellIds.length === ownedLands.length;
       const isBankruptCondition = allSelected && !isEnough;
 
+      // Auto-Bankruptcy Effect
+      useEffect(() => {
+          if (isBankruptCondition) {
+              const timer = setTimeout(() => {
+                  if (onDeclareBankruptcy) {
+                      onDeclareBankruptcy();
+                      onCancel();
+                  }
+              }, 3000);
+              return () => clearTimeout(timer);
+          }
+      }, [isBankruptCondition, onDeclareBankruptcy, onCancel]);
+
       const toggleSelection = (id: number) => {
+          if (isBankruptCondition) return; // Prevent interaction during auto-bankruptcy
           setSelectedSellIds(prev => prev.includes(id) ? prev.filter(x => x !== id) : [...prev, id]);
           playSound('CLICK');
       };
@@ -205,15 +219,10 @@ export const GameEventModal: React.FC<GameEventModalProps> = ({
                   {isBankruptCondition || (ownedLands.length === 0 && !isEnough) ? (
                       <Button 
                         variant="primary"
-                        className="w-full bg-red-800 border-red-600 hover:bg-red-700 animate-pulse"
-                        onClick={() => {
-                            if (window.confirm("모든 자산을 매각해도 파산을 면할 수 없습니다. 파산을 선언하시겠습니까?")) {
-                                onDeclareBankruptcy && onDeclareBankruptcy();
-                                onCancel(); // Close modal
-                            }
-                        }}
+                        className="w-full bg-red-900/50 border-red-600/50 text-red-300 cursor-wait animate-pulse"
+                        disabled
                       >
-                         <AlertOctagon size={16} className="mr-2"/> 파산 선언 (지불 불가)
+                         <AlertOctagon size={16} className="mr-2 animate-spin"/> 파산 처리 진행중...
                       </Button>
                   ) : (
                       <Button 

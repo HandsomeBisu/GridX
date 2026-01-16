@@ -89,10 +89,10 @@ export const BOARD_DATA: BoardCell[] = [
   { id: 19, name: '몬트리올', engName: 'Montreal', type: 'LAND', price: 200000, color: COLORS.GREEN, countryCode: 'ca' },
   { 
     id: 20, 
-    name: '무인도', 
-    engName: 'Desert Island', 
+    name: '감옥', 
+    engName: 'JAIL', 
     type: 'ISLAND',
-    image: 'https://images.unsplash.com/photo-1559128010-7c1ad6e1b6a5?q=80&w=400' // Tropical Island
+    image: 'https://assets.dpsteam.xyz/gridx-assets/jail.jpg' // Jail
   },
 
   // TOP ROW (Left to Right: 21 -> 30)

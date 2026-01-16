@@ -123,10 +123,11 @@ export const GameRulesModal: React.FC<GameRulesModalProps> = ({ isOpen, onClose 
                <SpecialCard title="우주여행" icon={<Plane/>} color="text-purple-400">
                   우주정거장(10번 칸)에 도착하면 다음 턴에 <strong>원하는 위치로 즉시 이동</strong>할 수 있습니다. 전략적 요충지입니다.
                </SpecialCard>
-               <SpecialCard title="무인도" icon={<AlertTriangle/>} color="text-red-400">
-                  무인도(20번 칸)에 갇히면 3턴 동안 이동할 수 없습니다. 
+               <SpecialCard title="감옥" icon={<AlertTriangle/>} color="text-red-400">
+                  감옥(20번 칸)에 갇히면 3턴 동안 이동할 수 없으며, <strong>다른 플레이어의 월급을 대신 지불</strong>해야 합니다.
                   <br/><span className="text-xs text-gray-500 mt-2 block">• 주사위 더블이 나오면 즉시 탈출</span>
-                  <span className="text-xs text-gray-500 block">• 20만원을 지불하고 탈출 가능</span>
+                  <span className="text-xs text-gray-500 block">• 20만원을 지불하고 즉시 탈출 가능</span>
+                  <span className="text-xs text-red-500 block mt-1">• 현금 부족 시 20만원 이상 자산 강제 매각</span>
                </SpecialCard>
                <SpecialCard title="사회복지기금" icon={<Coins/>} color="text-green-400">
                   <span className="text-green-400">수령처(38번)</span>에 도착하면 그동안 쌓인 기금을 모두 가져갑니다!

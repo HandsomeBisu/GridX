@@ -55,11 +55,13 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
   const [salaryNotification, setSalaryNotification] = useState<boolean>(false); // NEW: Salary Popup
   const [showRules, setShowRules] = useState(false); // Rules Modal State
   const [showTurnEffect, setShowTurnEffect] = useState(false);
+  const [systemNotification, setSystemNotification] = useState<{ text: string, type: 'BUY' | 'TOLL' | 'SELL' | 'GOLD_KEY' | 'DEFAULT' } | null>(null); // NEW: System Notification Popup
   
   // Refs
   const prevPlayersRef = useRef<Record<string, Player>>({});
   const processedActionIdRef = useRef<number>(0);
   const prevIsMyTurnRef = useRef<boolean>(false);
+  const lastProcessedChatIdRef = useRef<string | null>(null); // NEW: Track processed chat messages
 
   // Modal State
   const [modalState, setModalState] = useState<{
@@ -104,6 +106,27 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
       });
       return () => unsubscribe();
   }, [roomId, onQuit, isAnimating]);
+
+  // NEW: System Chat Notification Logic
+  useEffect(() => {
+      if (roomData?.chat && roomData.chat.length > 0) {
+          const lastMsg = roomData.chat[roomData.chat.length - 1];
+          if (lastMsg.type === 'SYSTEM' && lastMsg.id !== lastProcessedChatIdRef.current) {
+              // Ignore very old messages if just joined
+              if (Date.now() - lastMsg.timestamp < 3000) {
+                   let type: 'BUY' | 'TOLL' | 'SELL' | 'GOLD_KEY' | 'DEFAULT' = 'DEFAULT';
+                   if (lastMsg.text.includes('구매') || lastMsg.text.includes('건설')) type = 'BUY';
+                   else if (lastMsg.text.includes('통행료') || lastMsg.text.includes('지불')) type = 'TOLL';
+                   else if (lastMsg.text.includes('매각')) type = 'SELL';
+                   else if (lastMsg.text.includes('황금열쇠')) type = 'GOLD_KEY';
+
+                   setSystemNotification({ text: lastMsg.text, type });
+                   setTimeout(() => setSystemNotification(null), 4000);
+              }
+              lastProcessedChatIdRef.current = lastMsg.id;
+          }
+      }
+  }, [roomData?.chat]);
 
   // 3. Auto-Pass Turn Logic (Client Side Check)
   useEffect(() => {
@@ -548,20 +571,35 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
   const handleSellAssets = async (cellIds: number[]) => {
       if (!roomId || !currentUser) return;
       try {
-          // Process multiple sells
+          // 1. Sell Assets
           await Promise.all(cellIds.map(id => GameService.sellLand(roomId, currentUser.uid, id)));
-          playSound('BUILD'); 
           
+          // 2. Automatically Pay Toll if this was a forced sell (SELL_LAND)
+          if (modalState.type === 'SELL_LAND' && modalState.tollAmount && modalState.cellData?.owner) {
+              await GameService.payToll(roomId, currentUser.uid, modalState.cellData.owner, modalState.tollAmount);
+              playSound('PAY_TOLL');
+              
+              setModalState(prev => ({ ...prev, isOpen: false }));
+              handleEndTurn();
+          } else {
+              // Standard Sell (if used elsewhere)
+              playSound('BUILD'); 
+              setModalState(prev => ({ ...prev, isOpen: false }));
+              
+              setTimeout(() => {
+                  const currentPos = roomData?.players[currentUser.uid].position;
+                  if (currentPos !== undefined) handleArrival(currentPos);
+              }, 500);
+          }
+      } catch (e) { 
+          // If error, refresh state
+          console.error(e);
           setModalState(prev => ({ ...prev, isOpen: false }));
-          
-          // Re-trigger arrival to check if we can pay toll now (re-open PAY_TOLL if enough funds)
-          // Or just stay in SELL_LAND if not enough? 
-          // Current logic: close modal -> handleArrival -> re-evaluate.
           setTimeout(() => {
               const currentPos = roomData?.players[currentUser.uid].position;
               if (currentPos !== undefined) handleArrival(currentPos);
           }, 500);
-      } catch (e) { alert("매각 실패"); }
+      }
   };
 
   const handleModalCancel = () => {
@@ -592,7 +630,7 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
                <div className="z-10 text-center p-8 bg-luxury-panel border-2 border-gold-500 rounded-lg shadow-2xl animate-fade-in-up">
                    <Crown size={80} className="text-gold-500 mx-auto mb-6 animate-bounce" />
                    <h1 className="text-4xl md:text-6xl font-black text-white mb-2 tracking-tighter">
-                       {isMe ? "VICTORY!" : "GAME OVER"}
+                       {isMe ? "VICTORY!" : "DEFEAT"}
                    </h1>
                    <p className="text-gold-400 text-xl font-serif mb-8 uppercase tracking-widest">
                        {isMe ? "최후의 승자가 되었습니다!" : `${winner.name} 님의 승리입니다.`}
@@ -603,21 +641,18 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
       );
   }
 
-  // --- SPECTATOR / BANKRUPT SCREEN ---
-  if (myPlayer?.isBankrupt) {
-      return (
-        <div className="flex flex-col items-center justify-center h-full bg-black/90 relative z-50">
-             <Skull size={64} className="text-gray-500 mb-4" />
-             <h2 className="text-3xl font-bold text-red-500 mb-2">YOU ARE BANKRUPT</h2>
-             <p className="text-gray-400 mb-6">파산하여 게임에서 탈락했습니다. 관전 모드로 전환됩니다.</p>
-             <Button variant="secondary" onClick={onQuit}>나가기</Button>
-        </div>
-      );
-  }
-
   return (
     <div className="flex flex-col h-full w-full bg-[#050505] overflow-hidden relative">
       
+      {/* Spectator Overlay */}
+      {myPlayer?.isBankrupt && (
+        <div className="absolute top-24 left-1/2 transform -translate-x-1/2 z-[150] pointer-events-none">
+             <div className="bg-red-900/80 border border-red-500 text-red-100 px-6 py-2 rounded-full font-bold shadow-lg animate-pulse flex items-center gap-2">
+                 <Skull size={18} /> SPECTATOR MODE (BANKRUPT)
+             </div>
+        </div>
+      )}
+
       {/* Turn Start Flash Effect */}
       {showTurnEffect && (
         <div className="fixed inset-0 z-[200] pointer-events-none shadow-[inset_0_0_100px_rgba(245,132,26,0.5)] animate-flash-twice" />
@@ -640,6 +675,24 @@ export const GameScreen: React.FC<GameScreenProps> = ({ onQuit, roomId }) => {
         ownedLands={myOwnedCells}
         goldenKeyData={modalState.goldenKeyData}
       />
+
+      {/* System Notification Popup (Chat Mirror) */}
+      {systemNotification && (
+          <div className="absolute top-24 left-1/2 transform -translate-x-1/2 z-[120] pointer-events-none w-max max-w-[90vw]">
+               <div className={`
+                    backdrop-blur-md border px-6 py-3 rounded-full shadow-[0_0_30px_rgba(0,0,0,0.5)] animate-fade-in-down flex items-center justify-center
+                    ${systemNotification.type === 'BUY' ? 'bg-blue-900/80 border-blue-400 text-blue-100 shadow-blue-500/30' : 
+                      systemNotification.type === 'TOLL' ? 'bg-red-900/80 border-red-400 text-red-100 shadow-red-500/30' :
+                      systemNotification.type === 'SELL' ? 'bg-green-900/80 border-green-400 text-green-100 shadow-green-500/30' :
+                      systemNotification.type === 'GOLD_KEY' ? 'bg-yellow-900/80 border-yellow-400 text-yellow-100 shadow-yellow-500/30' :
+                      'bg-black/80 border-gold-500/50 text-white shadow-gold-500/30'}
+               `}>
+                    <span className="text-sm md:text-base font-bold tracking-wide text-center whitespace-pre-wrap leading-tight">
+                        {systemNotification.text}
+                    </span>
+               </div>
+          </div>
+      )}
 
       {/* Received Toll Notification Popup */}
       {receivedToll && (

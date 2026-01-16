@@ -238,7 +238,7 @@ export const GameService = {
 
           if (player.balance < ISLAND_ESCAPE_COST) throw "잔액이 부족합니다.";
 
-          const msg = createSystemMessage(`${player.name} 님이 비용을 지불하고 무인도를 탈출했습니다.`);
+          const msg = createSystemMessage(`${player.name} 님이 비용을 지불하고 감옥을 탈출했습니다.`);
 
           const action: GameAction = {
               type: 'ESCAPE_SUCCESS',
@@ -275,23 +275,35 @@ export const GameService = {
       
       const decisionTime = Date.now() + 60000; 
 
-      // Island Logic
+      // Jail/Island Logic
       if (player.islandTurns > 0) {
-          const nextTurns = player.islandTurns - 1;
-          const action: GameAction = {
-              type: 'ESCAPE_FAIL',
-              message: nextTurns > 0 ? `무인도 체류 중.. 남은 턴: ${nextTurns}` : `무인도 형기 종료. 다음 턴에 이동.`,
-              subjectId: playerId,
-              timestamp: Date.now()
-          };
+          if (d1 === d2) {
+              // Escape by Doubles
+              const escapeMsg = createSystemMessage(`${player.name} 님이 더블(${d1},${d2})을 기록하여 감옥에서 탈출합니다!`);
+              transaction.update(roomRef, {
+                  [`players.${playerId}.islandTurns`]: 0,
+                  chat: [...(roomData.chat || []), escapeMsg]
+              });
+              // Proceed to Move Logic naturally (islandTurns is 0 now effectively for next logic or just proceed)
+              // But strictly, we should update state locally for calculation or just force move now.
+              // Let's allow move this turn.
+          } else {
+              const nextTurns = player.islandTurns - 1;
+              const action: GameAction = {
+                  type: 'ESCAPE_FAIL',
+                  message: nextTurns > 0 ? `감옥 수감 중.. 남은 턴: ${nextTurns}` : `형기 종료. 다음 턴에 석방.`,
+                  subjectId: playerId,
+                  timestamp: Date.now()
+              };
 
-          transaction.update(roomRef, {
-              [`players.${playerId}.islandTurns`]: nextTurns,
-              lastDiceValues: [d1, d2],
-              lastAction: action,
-              turnDeadline: decisionTime
-          });
-          return;
+              transaction.update(roomRef, {
+                  [`players.${playerId}.islandTurns`]: nextTurns,
+                  lastDiceValues: [d1, d2],
+                  lastAction: action,
+                  turnDeadline: decisionTime
+              });
+              return;
+          }
       }
 
       // Normal Move
@@ -299,17 +311,76 @@ export const GameService = {
       let newBalance = player.balance;
       let salaryMsg = '';
       let chatUpdate = roomData.chat || [];
+      let updates: any = {};
 
       if (newPosition < player.position) {
-          newBalance += SALARY_AMOUNT; 
-          salaryMsg = ' (월급 수령)';
-          chatUpdate = [...chatUpdate, createSystemMessage(`${player.name} 님이 월급 ${SALARY_AMOUNT.toLocaleString()}원을 수령했습니다.`)];
+          // Passed Start - Salary Logic
+          const jailedPlayers = Object.values(roomData.players).filter(p => p.islandTurns > 0 && p.id !== playerId);
+          
+          if (jailedPlayers.length > 0) {
+              // Victim found (Priority to first found)
+              const victim = jailedPlayers[0];
+              let victimBalance = victim.balance;
+              
+              // Check if victim needs to sell assets
+              if (victimBalance < SALARY_AMOUNT) {
+                  // Find Asset to Sell
+                  const victimAssets = Object.entries(roomData.ownership).filter(([_, val]) => val.ownerId === victim.id);
+                  let soldAsset = false;
+                  
+                  for (const [cellId, ownership] of victimAssets) {
+                      const cell = BOARD_DATA.find(c => c.id === Number(cellId));
+                      if (!cell || !cell.price) continue;
+                      
+                      // Calculate Value
+                      let val = cell.price;
+                      if (ownership.buildings.hasVilla) val += cell.price * RATIOS.VILLA_COST;
+                      if (ownership.buildings.hasBuilding) val += cell.price * RATIOS.BUILD_COST;
+                      if (ownership.buildings.hasHotel) val += cell.price * RATIOS.HOTEL_COST;
+
+                      if (val >= SALARY_AMOUNT) {
+                          // Sell this
+                          const sellAmount = Math.floor(val);
+                          victimBalance += sellAmount;
+                          updates[`ownership.${cellId}`] = deleteDoc; // Actually delete field, but in update we use deleteField() or exclude. 
+                          // Firestore update delete field syntax is slightly diff. 
+                          // Simpler: Read ownership, remove key, write back 'ownership'.
+                          const newOwnership = { ...roomData.ownership };
+                          delete newOwnership[cellId];
+                          updates.ownership = newOwnership;
+                          updates[`players.${victim.id}.assets`] = victim.assets - 1;
+                          
+                          chatUpdate.push(createSystemMessage(`${victim.name} 님이 현금 부족으로 ${cell.name}을(를) 강제 매각했습니다.`));
+                          soldAsset = true;
+                          break;
+                      }
+                  }
+                  
+                  if (!soldAsset && victimBalance < SALARY_AMOUNT) {
+                      // Bankrupt Logic could go here, but for now just take what they have or go negative
+                  }
+              }
+
+              // Transfer
+              victimBalance -= SALARY_AMOUNT;
+              newBalance += SALARY_AMOUNT;
+              
+              updates[`players.${victim.id}.balance`] = victimBalance;
+              salaryMsg = ' (수감자 압류)';
+              chatUpdate.push(createSystemMessage(`${player.name} 님이 ${victim.name} 님의 계좌에서 월급을 압류했습니다.`));
+              
+          } else {
+              // Bank Pays
+              newBalance += SALARY_AMOUNT; 
+              salaryMsg = ' (월급 수령)';
+              chatUpdate.push(createSystemMessage(`${player.name} 님이 월급 ${SALARY_AMOUNT.toLocaleString()}원을 수령했습니다.`));
+          }
       }
 
       let islandTurns = 0;
       if (newPosition === 20) {
           islandTurns = 3;
-          chatUpdate = [...chatUpdate, createSystemMessage(`${player.name} 님이 무인도에 도착하여 3턴간 고립됩니다.`)];
+          chatUpdate.push(createSystemMessage(`${player.name} 님이 감옥에 수감되었습니다. (3턴)`));
       }
 
       const action: GameAction = {
@@ -319,15 +390,15 @@ export const GameService = {
           timestamp: Date.now()
       };
 
-      transaction.update(roomRef, {
-        [`players.${playerId}.position`]: newPosition,
-        [`players.${playerId}.balance`]: newBalance,
-        [`players.${playerId}.islandTurns`]: islandTurns,
-        lastDiceValues: [d1, d2],
-        lastAction: action,
-        turnDeadline: decisionTime,
-        chat: chatUpdate
-      });
+      updates[`players.${playerId}.position`] = newPosition;
+      updates[`players.${playerId}.balance`] = newBalance;
+      updates[`players.${playerId}.islandTurns`] = islandTurns;
+      updates.lastDiceValues = [d1, d2];
+      updates.lastAction = action;
+      updates.turnDeadline = decisionTime;
+      updates.chat = chatUpdate;
+
+      transaction.update(roomRef, updates);
     });
   },
 
@@ -618,14 +689,25 @@ export const GameService = {
           if (result.balanceChange !== undefined) {
               updateData[`players.${playerId}.balance`] = player.balance + result.balanceChange;
           }
+
+          if (result.newPos !== undefined) {
+              updateData[`players.${playerId}.position`] = result.newPos;
+              // Handle Jail (Island) if moved there
+              if (result.newPos === 20) {
+                   updateData[`players.${playerId}.islandTurns`] = 3;
+              }
+          }
           
           const action: GameAction = {
               type: 'GOLD_KEY',
               message: `황금열쇠: ${key.title}`, 
               subjectId: playerId,
-              amount: result.balanceChange,
               timestamp: Date.now()
           };
+
+          if (result.balanceChange !== undefined) {
+              action.amount = result.balanceChange;
+          }
 
           // Request: <닉네임> 님이 <황금열쇠 내용>으로 인해 <결과>
           const msg = createSystemMessage(`${player.name} 님이 황금열쇠 [${key.title}] 효과로 ${result.message.replace(' 수령', '').replace(' 납부', '')} 결과를 얻었습니다.`);

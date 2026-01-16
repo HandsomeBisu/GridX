@@ -173,10 +173,10 @@ export const GOLDEN_KEYS: GoldenKey[] = [
   // --- SPECIAL / MIXED ---
   { 
     id: 24, 
-    title: '무인도 표류', 
-    description: '폭풍우를 만나 무인도로 떠내려갑니다.', 
+    title: '용의자', 
+    description: '감옥에 수감됩니다.', 
     type: 'MOVE', 
-    effect: () => ({ newPos: 20, message: '무인도로 강제 이동' }) 
+    effect: () => ({ newPos: 20, message: '감옥으로 강제 이동' }) 
   },
   { 
     id: 25, 
@@ -209,14 +209,14 @@ export const GOLDEN_KEYS: GoldenKey[] = [
   { 
     id: 29, 
     title: '기적의 투자', 
-    description: '모든 자산 가치가 상승한 기분입니다. (보너스)', 
+    description: '자산 가치가 상승했습니다.', 
     type: 'MONEY', 
     effect: () => ({ balanceChange: 50000, message: '보너스 5만원' }) 
   },
   { 
     id: 30, 
-    title: '관광 가이드', 
-    description: '가장 비싼 땅 서울로 안내합니다.', 
+    title: '관광 여행', 
+    description: '서울로 가십시오.', 
     type: 'MOVE', 
     effect: () => ({ newPos: 39, message: '서울로 이동' }) 
   },

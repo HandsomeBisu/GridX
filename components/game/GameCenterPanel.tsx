@@ -39,6 +39,12 @@ export const GameCenterPanel: React.FC<GameCenterPanelProps> = ({
 }) => {
   const currentTurnPlayer = roomData.players[roomData.playerOrder[roomData.currentTurnIndex]];
   const myPlayer = currentUser ? roomData.players[currentUser.uid] : null;
+  
+  // Bug Fix: Check if I already acted this turn (to prevent re-roll on refresh/resize)
+  const lastAction = roomData.lastAction;
+  const hasAlreadyActed = isMyTurn && 
+      lastAction?.subjectId === currentUser?.uid && 
+      lastAction?.type !== 'START_TURN';
 
   // Timer State
   const [timeLeft, setTimeLeft] = useState<number>(30);
@@ -69,7 +75,7 @@ export const GameCenterPanel: React.FC<GameCenterPanelProps> = ({
     return () => clearInterval(interval);
   }, [roomData.turnDeadline, isWaiting, roomData.status, isModalOpen]);
 
-  const canInteract = isMyTurn && !isAnimating && !diceRolling && !isProcessing;
+  const canInteract = isMyTurn && !isAnimating && !diceRolling && !isProcessing && !hasAlreadyActed;
 
   return (
     <div className="absolute inset-[9.09%] bg-[#111] z-20 flex flex-col items-center justify-center overflow-hidden border border-gold-900/30">
